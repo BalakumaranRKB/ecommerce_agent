@@ -168,8 +168,10 @@ A closed set gives the classifier a finite decision, makes routing and logging
 explicit, and makes "did we handle this type" testable. Exactly one customer is
 bound per conversation, which turns "does this ID belong to this ticket" into a
 crisp, testable predicate and mirrors how real support tickets are scoped. A
-customer's *other* tickets live in the prior-ticket history store and are reached
-by lookup — never worked concurrently in the same chat.
+customer's *other* tickets live in the prior-ticket history store as closed
+records: the agent can freely *reference* them within a chat (long-term memory),
+but only ever *works* one active ticket at a time — it never handles several open
+tickets concurrently in the same conversation.
 
 **Where the permission boundary lives (the MCP-layer decision).** Permission is
 enforced in two layers, primary at the harness. Before any proposed
