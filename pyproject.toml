@@ -1,0 +1,23 @@
+[project]
+name = "ecommerce-agent"
+version = "0.1.0"
+description = "Harness-controlled, tool-connected, RAG-grounded e-commerce order-support agent."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "anthropic>=0.40.0",     # default LLM provider
+    "groq>=0.11.0",          # free-tier provider for cheap iteration
+    "python-dotenv>=1.0.0",  # loads API keys from .env
+    "mcp[cli]>=1.28.0,<2.0", # FastMCP server + stdio client (Stage 2+); pin to 1.x API
+    "chromadb>=0.5.0",       # local vector store for policy-doc RAG (Stage 4)
+    "sentence-transformers>=3.0.0",  # local embeddings (all-MiniLM-L6-v2)
+]
+
+[project.optional-dependencies]
+# (none currently)
+
+# This is a flat, unpackaged app: loose modules (llm.py, harness.py, ...) with no
+# package to build or install. With no [build-system] table declared, uv installs
+# only the dependencies above; package = false makes that intent explicit.
+[tool.uv]
+package = false
