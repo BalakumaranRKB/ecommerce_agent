@@ -28,11 +28,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from eval.trajectory import Trajectory, record, recording
 from harness import db_owner_resolver, make_mcp_dispatch, run_harnessed
 from memory import Conversation
 from retriever import PolicyRetriever
 from ticket import TICKET_TYPES, Ticket
 from tools_schema import TOOLS_BY_PROVIDER
+from tracing import current_trace_id, observe, trace_context
 
 # The base persona. Ticket context, prior tickets, and retrieved policy are
 # appended per turn.
@@ -64,6 +66,7 @@ CLASSIFY_PROMPT = (
 )
 
 
+@observe(name="classify")
 def classify_ticket(provider, message: str) -> str:
     """Return one of TICKET_TYPES. Falls back to 'order_status' if the model
     replies with anything unexpected — better a default than a crash."""
@@ -84,9 +87,15 @@ class Session:
 
     ticket: Ticket
     provider: object
-    provider_name: str = "groq"
+    provider_name: str = "anthropic"
     retriever: PolicyRetriever | None = None
     conversation: Conversation = field(init=False)
+    # Set after each turn; POST /chat returns it (§6.7) so an answer can be tied
+    # back to the trace that produced it. None when tracing is off.
+    last_trace_id: str | None = field(default=None, init=False)
+    # Set after each turn; what the eval scores. Distinct from the LangFuse
+    # trace on purpose (PLAN §5.4) — same events, two audiences, no coupling.
+    last_trajectory: Trajectory | None = field(default=None, init=False)
 
     def __post_init__(self):
         self.conversation = Conversation(ticket=self.ticket)
@@ -103,7 +112,25 @@ class Session:
         )
 
     def answer_turn(self, user_message: str) -> str:
-        """Run one full turn. Returns the agent's answer."""
+        """Run one full turn. Returns the agent's answer.
+
+        trace_context opens the ROOT span and binds ticket identity to every
+        span beneath it, so the whole turn — classify, retrieve, each harness
+        decision, each tool dispatch — arrives in LangFuse as one nested tree
+        rather than a scatter of unrelated spans.
+
+        recording() collects the same events into a plain list for the eval.
+        Both wrap the same call because they observe the same turn; neither
+        depends on the other, and the agent runs fine with both switched off.
+        """
+        with recording() as trajectory:
+            with trace_context(self.ticket):
+                answer = self._run_turn(user_message)
+                self.last_trace_id = current_trace_id()
+        self.last_trajectory = trajectory
+        return answer
+
+    def _run_turn(self, user_message: str) -> str:
         # 1. Append the customer message to the buffer.
         self.conversation.add_user(user_message)
 

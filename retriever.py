@@ -1,6 +1,6 @@
 """
-RAG over the policy docs: Chroma (vector store) + sentence-transformers
-(embeddings), both local and free.
+RAG over the policy docs: PostgreSQL + pgvector for storage,
+sentence-transformers for embeddings.
 
 Three properties this retriever must have (assignment §2.3):
 
@@ -13,17 +13,29 @@ Three properties this retriever must have (assignment §2.3):
    and an empty result list is a first-class outcome meaning "nothing in the
    knowledge base covers this." An honest gap beats a confident guess.
 
+CHANGED IN ASSIGNMENT 2 — storage only. Chroma held the index inside this
+process; pgvector holds it in a table every process shares. The Retrieved shape,
+the MIN_SIMILARITY floor, and the empty-list-means-gap contract are all
+unchanged, which is what let this migration happen without re-tuning anything.
+
+Why the change was necessary (docs/PLAN-assignment-2.md §5.2): an in-process
+index belongs to one process. Autoscaling to a second Fargate task would give
+each task its own private copy — duplicated startup cost, and two indexes that
+can silently disagree. Shared state is the requirement autoscaling creates.
+
+Cosine equivalence, which is why the threshold transferred untouched:
+    Chroma cosine space : similarity = 1 - distance
+    pgvector `<=>`      : cosine DISTANCE, so similarity = 1 - distance
+Same metric, same scale, same 0.32 floor.
+
 Chunking: each policy doc is a single short paragraph, so one document = one
 chunk. That keeps traceability exact (a hit points at a whole doc, not a
 fragment of one) and avoids chunk-boundary tuning that would buy nothing here.
 
-Storage: an in-memory Chroma client, re-indexed at startup. With 7 tiny docs,
-embedding them takes milliseconds, and it removes a whole class of stale-index
-bugs (edit a doc, forget to re-index, silently retrieve the old text). Swapping
-to chromadb.PersistentClient(path=...) is a one-line change if the corpus ever
-grows enough to make startup cost matter.
+Indexing: none, on purpose. See the note in db.py — at 7 rows a sequential scan
+beats any ANN structure and IVFFlat has nothing to train on.
 
-Run the dataset sanity check (embeds docs, no LLM involved):
+Run the dataset sanity check (reads the database; run ingest.py first):
     uv run python retriever.py
 """
 
@@ -32,7 +44,9 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-import chromadb
+import db
+from eval.trajectory import record
+from tracing import observe
 
 # Where the policy docs live, resolved relative to this file so CWD never matters.
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -94,60 +108,60 @@ class SentenceTransformerEmbedder:
 
 
 class PolicyRetriever:
+    """Queries the shared policy_chunks table. Holds no index of its own —
+    constructing one is cheap because there is nothing to build."""
+
     def __init__(
         self,
         embedder=None,
-        docs_dir: str = DOCS_DIR,
         min_similarity: float = MIN_SIMILARITY,
     ):
         self.embedder = embedder or SentenceTransformerEmbedder()
         self.min_similarity = min_similarity
-        self.docs = load_policy_docs(docs_dir)
 
-        # Cosine space, so distance = 1 - cosine_similarity.
-        client = chromadb.EphemeralClient()
-        self.collection = client.get_or_create_collection(
-            name=COLLECTION_NAME,
-            metadata={"hnsw:space": "cosine"},
-        )
-        self._index()
-
-    def _index(self) -> None:
-        embeddings = self.embedder([d["text"] for d in self.docs])
-        self.collection.upsert(
-            ids=[d["doc_id"] for d in self.docs],
-            embeddings=embeddings,
-            documents=[d["text"] for d in self.docs],
-            metadatas=[{"title": d["title"]} for d in self.docs],
-        )
-
+    @observe(name="retrieve")
     def retrieve(self, query: str, k: int = TOP_K) -> list[Retrieved]:
         """Return up to k chunks above the similarity threshold, best first.
 
         An EMPTY list is meaningful: nothing in the knowledge base covers this
         question. Callers must treat that as an honest gap, not as a reason to
         answer from the model's own knowledge.
+
+        @observe captures the query as span input and the returned Retrieved
+        list as span output, so every doc_id and similarity that produced an
+        answer is visible in the trace without any explicit logging. That is
+        what makes a confident wrong path findable (Stage 4): an answer citing
+        a plausible-but-wrong doc looks fine in the text and obvious here.
+
+        The threshold is applied in SQL, so a row below it never leaves the
+        database — "retrieved" means the same thing on both sides of the wire.
         """
         query_embedding = self.embedder([query])[0]
-        result = self.collection.query(query_embeddings=[query_embedding], n_results=k)
-
-        hits = []
-        for doc_id, distance, text, metadata in zip(
-            result["ids"][0],
-            result["distances"][0],
-            result["documents"][0],
-            result["metadatas"][0],
-        ):
-            similarity = 1.0 - distance  # cosine space
-            if similarity >= self.min_similarity:
-                hits.append(
-                    Retrieved(
-                        doc_id=doc_id,
-                        title=metadata.get("title", doc_id),
-                        text=text,
-                        similarity=similarity,
-                    )
-                )
+        rows = db.search_policy_chunks(query_embedding, k, self.min_similarity)
+        hits = [
+            Retrieved(
+                doc_id=r["doc_id"],
+                title=r["title"],
+                text=r["body"],
+                similarity=float(r["similarity"]),
+            )
+            for r in rows
+        ]
+        # Recorded for the eval, separately from the @observe span above. The
+        # doc_ids and scores are what let a fixture assert the RIGHT doc was
+        # used, not merely that retrieval happened — which is the difference
+        # between catching a confident wrong path and missing it entirely.
+        record(
+            "retrieval",
+            "retrieve",
+            args={"query": query, "k": k},
+            outcome="ok" if hits else "empty",
+            detail={
+                "doc_ids": [h.doc_id for h in hits],
+                "similarities": [round(h.similarity, 4) for h in hits],
+                "min_similarity": self.min_similarity,
+            },
+        )
         return hits
 
     def format_for_prompt(self, hits: list[Retrieved]) -> str:
@@ -191,8 +205,14 @@ GAP_QUESTIONS = [
 
 
 if __name__ == "__main__":
+    n_indexed = db.count_policy_chunks()
+    if n_indexed == 0:
+        raise SystemExit(
+            "No policy chunks in the database. Run:  uv run python ingest.py"
+        )
+
     retriever = PolicyRetriever()
-    print(f"Indexed {len(retriever.docs)} policy docs from {DOCS_DIR}")
+    print(f"Querying {n_indexed} policy chunks in postgres (pgvector)")
     print(f"Threshold: similarity >= {retriever.min_similarity}\n")
 
     print("=== covered questions: does the expected doc come back first? ===")

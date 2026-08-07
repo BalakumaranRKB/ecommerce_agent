@@ -27,9 +27,11 @@ from __future__ import annotations
 
 from typing import Callable
 
-import mock_data as data
+import db
+from eval.trajectory import record
 from mcp_client import call_tool
 from ticket import Ticket
+from tracing import observe
 
 # The only tools the model is ever allowed to invoke. Both are read-only.
 PERMITTED_TOOLS = {"lookup_order", "check_account_status"}
@@ -58,10 +60,17 @@ def make_owner_resolver(order_owner) -> OwnerResolver:
 
 
 def db_owner_resolver() -> OwnerResolver:
-    """The real resolver, backed by the mock DB's ownership index."""
-    return make_owner_resolver(data.ORDER_OWNER)
+    """The real resolver, backed by the orders table.
+
+    Assignment 2: one indexed lookup per proposed call instead of a dict read.
+    Note what it fetches — `fetch_order_owner` returns the customer_id ONLY,
+    never the order contents. The policy layer gets exactly the fact it needs to
+    decide, and nothing it would then have to be trusted not to leak.
+    """
+    return make_owner_resolver(db.fetch_order_owner)
 
 
+@observe(name="harness_check")
 def harness_check(
     tool_name: str,
     tool_input: dict,
@@ -74,6 +83,12 @@ def harness_check(
     Two rules, checked here before anything runs:
       1. the tool must be in the permitted read-only set, and
       2. the requested entity must belong to the active ticket's customer.
+
+    Traced because a rejection is a first-class event, not an error: the span
+    output carries (allowed, reason), so a cross-customer attempt that was
+    blocked is visible in the trace as a decision that happened. An eval that
+    only saw final answers could not tell "never tried it" from "tried it and
+    was stopped" — the trajectory needs both.
     """
     if tool_name not in PERMITTED_TOOLS:
         return False, f"tool '{tool_name}' is not in the permitted set {sorted(PERMITTED_TOOLS)}"
@@ -98,13 +113,24 @@ def make_mcp_dispatch(ticket: Ticket) -> Callable[[str, dict], str]:
     scope are anchored to the same customer by construction, not by convention.
     """
 
+    @observe(name="mcp_dispatch")
     def dispatch(tool_name: str, tool_input: dict) -> str:
         is_error, text = call_tool(ticket.customer_id, tool_name, tool_input)
+        # Recorded only on the dispatch path. A proposal the harness blocked is
+        # recorded as a harness_reject instead and never reaches here, so
+        # trajectory.tools_called() means "actually executed" and nothing else.
+        record(
+            "tool_call",
+            tool_name,
+            args=tool_input,
+            outcome="error" if is_error else "ok",
+        )
         return f"TOOL ERROR: {text}" if is_error else text
 
     return dispatch
 
 
+@observe(name="harness_loop")
 def run_harnessed(
     messages: list,
     ticket: Ticket,
@@ -137,6 +163,19 @@ def run_harnessed(
             allowed, reason = harness_check(tc.name, tc.input, ticket, resolve_owner)
             if not allowed:
                 print(f"  [HARNESS] REJECTED {tc.name}({tc.input})  ->  {reason}")
+                # A blocked proposal is a first-class step, not an error. The
+                # eval must be able to tell "never attempted a cross-customer
+                # lookup" from "attempted it and was stopped" — very different
+                # agents, and only one of them is safe. Recorded here rather
+                # than inside harness_check() so that function stays a pure
+                # predicate with no side effects.
+                record(
+                    "harness_reject",
+                    tc.name,
+                    args=tc.input,
+                    outcome="rejected",
+                    detail={"reason": reason},
+                )
                 results[tc.id] = f"BLOCKED BY HARNESS: {reason}"
             else:
                 print(f"  [HARNESS] allowed  {tc.name}({tc.input})")

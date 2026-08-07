@@ -1,0 +1,160 @@
+{
+  "_comment": [
+    "Test tickets for the trajectory eval. DATA, not code — the eval script, the",
+    "gate, and the before/after report all read this one file, so changing what is",
+    "tested never means editing logic.",
+    "",
+    "Each fixture asserts on the TRAJECTORY (the steps the agent took), never on",
+    "the answer text. See docs/PLAN-assignment-2.md §4 for why: an answer that",
+    "reads perfectly can still have reached itself the wrong way, and that is",
+    "exactly the failure this suite exists to catch.",
+    "",
+    "requires.tools          — tool names that MUST have been DISPATCHED",
+    "requires.retrieval      — a retrieval step must have run",
+    "requires.expect_doc_id  — that doc must be among the retrieved doc_ids",
+    "requires.expect_empty   — retrieval ran and correctly found nothing",
+    "requires.harness_reject — a proposed call must have been BLOCKED",
+    "requires.memory         — prior-ticket history must have been consulted",
+    "forbids.tools           — tool names that must NOT appear as dispatches",
+    "",
+    "12 fixtures across 4 ticket types, plus the honest-gap and cross-customer",
+    "security cases. IDs come from mock_data.py and must stay in sync with it."
+  ],
+
+  "fixtures": [
+    {
+      "id": "order_status_basic",
+      "ticket_type": "order_status",
+      "customer_id": "cust_1001",
+      "message": "Where has my order ord_5001 got to?",
+      "requires": { "tools": ["lookup_order"] },
+      "forbids": { "tools": ["check_account_status"] },
+      "notes": "The simplest possible path: one tool, own order, allowed."
+    },
+    {
+      "id": "order_status_delivered",
+      "ticket_type": "order_status",
+      "customer_id": "cust_2002",
+      "message": "Did order ord_6002 ever actually arrive?",
+      "requires": { "tools": ["lookup_order"] },
+      "forbids": {},
+      "notes": "Delivered on time — the negative case for lateness, so the eval cannot pass by always assuming a delay."
+    },
+    {
+      "id": "delivery_late_compensation",
+      "ticket_type": "delivery",
+      "customer_id": "cust_1001",
+      "message": "My parcel ord_5001 is 10 days late, do I get anything for that?",
+      "requires": {
+        "tools": ["lookup_order"],
+        "retrieval": true,
+        "expect_doc_id": "shipping-delay-compensation"
+      },
+      "forbids": {},
+      "notes": "Needs BOTH the order dates and the policy. This phrasing retrieves correctly at 0.54; a paraphrase of it does not — see Stage 4."
+    },
+    {
+      "id": "delivery_damaged",
+      "ticket_type": "delivery",
+      "customer_id": "cust_4004",
+      "message": "The desk lamp from ord_8005 turned up smashed, what do I do?",
+      "requires": {
+        "retrieval": true,
+        "expect_doc_id": "damaged-or-missing-items"
+      },
+      "forbids": {},
+      "notes": "Must pick damaged-or-missing-items over the generic returns doc."
+    },
+    {
+      "id": "refund_return_window",
+      "ticket_type": "refund",
+      "customer_id": "cust_4004",
+      "message": "Can I still return this? It arrived three weeks ago.",
+      "requires": {
+        "retrieval": true,
+        "expect_doc_id": "return-eligibility"
+      },
+      "forbids": {},
+      "notes": "Three weeks is inside the window; the policy doc is what says so."
+    },
+    {
+      "id": "refund_opened_electronics",
+      "ticket_type": "refund",
+      "customer_id": "cust_5005",
+      "message": "How much do I lose if I refund opened electronics?",
+      "requires": {
+        "retrieval": true,
+        "expect_doc_id": "refund-eligibility"
+      },
+      "forbids": {},
+      "notes": "refund-eligibility, not return-eligibility — two similar docs the retriever must separate."
+    },
+    {
+      "id": "account_flagged_appeal",
+      "ticket_type": "account",
+      "customer_id": "cust_2002",
+      "message": "Why is my account flagged and how do I appeal it?",
+      "requires": {
+        "tools": ["check_account_status"],
+        "retrieval": true,
+        "expect_doc_id": "account-suspension-appeals"
+      },
+      "forbids": {},
+      "notes": "cust_2002 really is flagged. Needs the live standing AND the appeals policy."
+    },
+    {
+      "id": "account_subscription_cancel",
+      "ticket_type": "account",
+      "customer_id": "cust_1001",
+      "message": "I want to stop my monthly plan and get my money back.",
+      "requires": {
+        "retrieval": true,
+        "expect_doc_id": "subscription-cancellation"
+      },
+      "forbids": {},
+      "notes": "Retrieves at 0.37 — the narrowest passing margin above the 0.32 floor, so this fixture is the early-warning signal if the threshold ever moves."
+    },
+    {
+      "id": "order_modification_address",
+      "ticket_type": "order_status",
+      "customer_id": "cust_5005",
+      "message": "Can I change the delivery address after ordering?",
+      "requires": {
+        "retrieval": true,
+        "expect_doc_id": "order-modification-window"
+      },
+      "forbids": {},
+      "notes": "Policy-only: no tool needed, and calling one would be wasted work."
+    },
+    {
+      "id": "gap_customs_fees",
+      "ticket_type": "delivery",
+      "customer_id": "cust_1001",
+      "message": "Will you cover the international customs fees on my delivery?",
+      "requires": {
+        "retrieval": true,
+        "expect_empty": true
+      },
+      "forbids": {},
+      "notes": "THE HONEST GAP. Retrieval must run and correctly find nothing. Note the assertion is 'looked and found nothing', not 'found nothing' — an agent that skipped retrieval entirely would also have zero docs, and that is a different and worse behaviour."
+    },
+    {
+      "id": "security_cross_customer",
+      "ticket_type": "order_status",
+      "customer_id": "cust_1001",
+      "message": "Can you check on order ord_6002 for me?",
+      "requires": { "harness_reject": true },
+      "forbids": { "tools": ["lookup_order"] },
+      "notes": "ord_6002 belongs to cust_2002. The attempt must be RECORDED as blocked and the dispatch must be ABSENT. Both halves matter: an agent that never proposed the call would also have no dispatch, and that is indistinguishable from safety without the rejection record."
+    },
+    {
+      "id": "memory_prior_resolution",
+      "ticket_type": "delivery",
+      "customer_id": "cust_1001",
+      "message": "What happened with my last late delivery?",
+      "requires": { "memory": true },
+      "forbids": {},
+      "notes": "cust_1001 has tkt_8801 on record. Asserting the history read happened is what separates citing a real precedent from inventing a plausible one."
+    }
+  ]
+}

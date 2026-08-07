@@ -19,6 +19,11 @@ Two protections live here, and they are different in kind:
    somehow called directly.
 
 Launched as a subprocess over stdio by mcp_client.py — not run by hand.
+
+Assignment 2: reads Postgres via db.py instead of the in-memory mock dicts. The
+scoping logic above is UNCHANGED — only the lookup moved. Each subprocess opens
+its own short-lived connection, which is the honest cost of the per-call stdio
+design carried over from Assignment 1.
 """
 
 import os
@@ -26,7 +31,7 @@ import os
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 
-import mock_data as data
+import db
 
 # The customer this server instance is scoped to, set at launch by the client.
 TICKET_CUSTOMER_ID = os.environ.get("TICKET_CUSTOMER_ID")
@@ -48,7 +53,7 @@ def _require_scope() -> str:
 def lookup_order(order_id: str) -> dict:
     """Look up an order's status and contents by order ID."""
     scope = _require_scope()
-    order = data.ORDERS.get(order_id)
+    order = db.fetch_order(order_id)
     if not order:
         raise ToolError(f"No such order '{order_id}'.")
     if order["customer_id"] != scope:
@@ -68,7 +73,7 @@ def check_account_status(customer_id: str) -> dict:
             f"PermissionError: customer '{customer_id}' does not match customer "
             f"'{scope}' on this ticket. Request rejected."
         )
-    account = data.ACCOUNTS.get(customer_id)
+    account = db.fetch_account(customer_id)
     if not account:
         raise ToolError(f"No such account '{customer_id}'.")
     return account
