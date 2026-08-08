@@ -1,0 +1,28 @@
+# Keep the build context small and the image clean. Without this, COPY . . drags
+# in the local virtualenv and git history — hundreds of MB that slow every build
+# and every Fargate task pull, and .venv would shadow the container's own
+# site-packages with Windows-built wheels.
+
+.venv/
+venv/
+.git/
+.github/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.ruff_cache/
+
+# Secrets must come from SSM at runtime, never be baked into a layer.
+.env
+
+# Local-only tooling and working files.
+docs/
+eval/results/
+eval/report_before.json
+eval/report_after.json
+eval/report_output.txt
+docker-compose.dev.yml
+*.md
+!README.md
