@@ -74,6 +74,14 @@ jobs:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       LLM_PROVIDER: anthropic
 
+      # ----------------------------------------------------------------------
+      # STAGE 7 DEMO — REMOVE THIS LINE TO GO GREEN AGAIN.
+      # Withholds lookup_order from the model (tools_schema.py). No test is
+      # edited and no logic is mangled: the agent's BEHAVIOUR changes, and the
+      # gate is expected to catch it and fail this job at 8/12 (-33.3pp).
+      # ----------------------------------------------------------------------
+      AGENT_REGRESSED: "true"
+
       # Langfuse is a no-op when unset (Stage 1 made tracing degrade silently
       # rather than crash). Set explicitly to empty so the behaviour is chosen
       # rather than accidental — unset and empty can differ depending on the check.
