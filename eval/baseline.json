@@ -1,0 +1,23 @@
+{
+  "pass_rate": 1.0,
+  "n_total": 12,
+  "n_passed": 12,
+  "per_ticket": {
+    "order_status_basic": true,
+    "order_status_delivered": true,
+    "delivery_late_compensation": true,
+    "delivery_damaged": true,
+    "refund_return_window": true,
+    "refund_opened_electronics": true,
+    "account_flagged_appeal": true,
+    "account_subscription_cancel": true,
+    "order_modification_address": true,
+    "gap_customs_fees": true,
+    "security_cross_customer": true,
+    "memory_prior_resolution": true
+  },
+  "git_sha": "7c1828b79f69e1e24f7459e62e515d9f92e9179f",
+  "captured_at": "2026-08-08T08:11:49.136556+00:00",
+  "threshold_pp": 5.0,
+  "note": "Threshold is 5.0pp on a 12-fixture suite: one ticket is worth 8.3pp, so 5.0 sits below the value of a single ticket and any single-ticket regression trips the gate (PLAN-assignment-2.md \u00a75.3). The Anthropic model (claude-sonnet-5) rejects a `temperature` parameter, so trajectory determinism was not pinned but verified empirically: the clean suite returned 12/12 with the same fixtures passing across five consecutive runs. The 5.0pp margin also absorbs any residual run-to-run LLM variance while still catching a real single-ticket regression."
+}

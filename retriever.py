@@ -2,7 +2,7 @@
 RAG over the policy docs: PostgreSQL + pgvector for storage,
 sentence-transformers for embeddings.
 
-Three properties this retriever must have (assignment §2.3):
+Four properties this retriever must have (assignment §2.3 + Stage 4 fix):
 
 1. It genuinely retrieves — real embeddings, real vector search, not string
    matching.
@@ -42,6 +42,7 @@ Run the dataset sanity check (reads the database; run ingest.py first):
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 
 import db
@@ -63,6 +64,45 @@ TOP_K = 2
 #   strongest leaked hit: order-modification-window  at 0.30
 # Floor set at 0.32 — clears the leak with margin on both sides.
 MIN_SIMILARITY = 0.32
+
+# ---------------------------------------------------------------------------
+# Stage 4 fix: strip entity-specific tokens before embedding.
+#
+# MiniLM-L6-v2 averages ALL tokens into a single 384-dim vector. When a
+# customer writes "The desk lamp from ord_8005 turned up smashed", the tokens
+# for the order id and product name pull the vector away from the policy
+# document it should match. The sanity-check queries (COVERED_QUESTIONS) pass
+# because they were written in the same vocabulary as the policy docs, without
+# these entity specifics.
+#
+# The fix: remove order ids and product names BEFORE embedding. The full
+# untouched message is still used everywhere else — conversation history,
+# LLM context, tool call generation, harness scoping, MCP dispatch.
+# See docs/confident-wrong-path.md for the full writeup.
+# ---------------------------------------------------------------------------
+_ORDER_ID_RE = re.compile(r"\bord_\d+\b", re.IGNORECASE)
+_PRODUCT_NAMES = [
+    "wireless earbuds", "phone case", "notebook", "laptop stand",
+    "usb-c cable", "mechanical keyboard", "desk lamp", "27-inch monitor",
+]
+
+
+def strip_specifics(query: str) -> str:
+    """Remove order ids and product names from a query, leaving the intent.
+
+    This is the Stage 4 CWP fix: the stripped text is what gets turned into a
+    vector for similarity search. The original text is preserved for everything
+    else (conversation, tools, harness). See docs/confident-wrong-path.md.
+    """
+    cleaned = _ORDER_ID_RE.sub("", query)
+    lowered = cleaned.lower()
+    for name in _PRODUCT_NAMES:
+        idx = lowered.find(name)
+        while idx != -1:
+            cleaned = cleaned[:idx] + cleaned[idx + len(name):]
+            lowered = cleaned.lower()
+            idx = lowered.find(name)
+    return re.sub(r"\s+", " ", cleaned).strip()
 
 
 @dataclass
@@ -135,8 +175,16 @@ class PolicyRetriever:
 
         The threshold is applied in SQL, so a row below it never leaves the
         database — "retrieved" means the same thing on both sides of the wire.
+
+        Stage 4 fix: the query is cleaned (order ids and product names
+        stripped) before embedding, so entity-specific tokens don't dilute
+        the vector. The original query is preserved in the trajectory record
+        for traceability. See docs/confident-wrong-path.md.
         """
-        query_embedding = self.embedder([query])[0]
+        # Strip entity-specific tokens before embedding (Stage 4 CWP fix).
+        # The original query is kept for the trajectory record below.
+        embedding_query = strip_specifics(query)
+        query_embedding = self.embedder([embedding_query])[0]
         rows = db.search_policy_chunks(query_embedding, k, self.min_similarity)
         hits = [
             Retrieved(
@@ -154,7 +202,7 @@ class PolicyRetriever:
         record(
             "retrieval",
             "retrieve",
-            args={"query": query, "k": k},
+            args={"query": query, "embedding_query": embedding_query, "k": k},
             outcome="ok" if hits else "empty",
             detail={
                 "doc_ids": [h.doc_id for h in hits],

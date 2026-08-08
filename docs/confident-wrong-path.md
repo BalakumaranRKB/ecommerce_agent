@@ -148,21 +148,46 @@ the test that goes red.
 
 ## The fix
 
-**Status: not yet applied.** Documented before fixing, deliberately — §2.2
-requires the eval to fail this case first, and it currently does.
+**Status: applied.** The eval failed this case before fixing (11/12 = 91.7%,
+`delivery_damaged` FAIL). After the fix, the eval passes it (12/12 = 100%).
 
-**Hypothesis:** order ids and product names dilute the query embedding. Stripping
-them before embedding — while the tool call still receives the untouched message
-— should recover the correct document.
+**Hypothesis — confirmed:** order ids and product names dilute the query
+embedding. Stripping them before embedding — while the tool call still receives
+the untouched message — recovers the correct document.
 
-Verify with:
+Validated with:
 
 ```bash
 uv run python -m eval.reproduce_cwp --hypothesis
 ```
 
-That re-runs each failing query with specifics removed and reports how many
-recover. If none do, the hypothesis is wrong and the cause lies elsewhere.
+**What the fix does** (`retriever.py`, `strip_specifics()`):
+
+- Removes order id patterns (`ord_\d+`) and known product names from the query
+  **before embedding only**. The full untouched message is preserved for:
+  - Conversation history (`conversation.add_user()`)
+  - LLM context and tool call generation
+  - Harness scoping (customer_id / order_id ownership checks)
+  - MCP dispatch (`TICKET_CUSTOMER_ID` env var)
+- The trajectory record logs both the original query and the cleaned embedding
+  query, so the fix itself is traceable.
+
+**Results after fix:**
+
+| Instance | Before fix | After fix |
+|---|---|---|
+| 1 (ord_5001 late) | ❌ MISSING | ✅ FOUND (0.40) |
+| 2 (delivery status of ord_5001) | ❌ MISSING | ❌ MISSING — different root cause |
+| 3 (desk lamp smashed) — **headline case** | ❌ MISSING | ✅ FOUND (0.33) |
+
+Instance 2 is a genuinely different problem: the query `"can you tell me about
+the delivery status of ord_5001"` is inherently vague — after stripping, `"can
+you tell me about the delivery status of"` has no semantic signal matching
+`shipping-delay-compensation`. This is a weak query, not token dilution.
+
+**The `delivery_damaged` fixture stays in the suite permanently.** If retrieval
+ever becomes brittle to phrasing again — a model update, a threshold change, a
+regression in `strip_specifics` — this is the test that goes red.
 
 **Alternatives considered:**
 
@@ -177,6 +202,3 @@ recover. If none do, the hypothesis is wrong and the cause lies elsewhere.
   That is tuning the test until it passes, which is the precise anti-pattern this
   assignment exists to teach against. The fixture's phrasing is realistic; the
   retriever is brittle.
-
-Once applied, all three instances above should pass, and the before/after will be
-measurable against `eval/results/stage3-baseline.json`.

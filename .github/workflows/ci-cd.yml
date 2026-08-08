@@ -1,0 +1,121 @@
+# CI — trajectory regression gate (PLAN-assignment-2.md Stage 6)
+#
+# This workflow is deliberately DUMB. It contains no thresholds, no pass/fail
+# arithmetic, and no comparison logic. All of that lives in Python, in
+# eval/regression_eval.py, so it can be run and debugged on a laptop exactly as
+# it runs here (PLAN §7). The only thing this file does is set up an equivalent
+# environment and react to the eval's exit code:
+#
+#     exit 0 -> job passes
+#     exit 1 -> job fails, push is blocked
+#
+# The reference it compares against is eval/baseline.json, committed to the repo
+# and frozen deliberately (see docs/choosing-the-baseline.md for why 5pp and why
+# the comparison is relative rather than an absolute bar).
+
+name: CI
+
+on:
+  push:
+    branches:
+      - assignment_2
+  pull_request:
+    branches:
+      - assignment_1   # the PR target: main is empty and unrelated (Stage 0)
+
+# Cancel a previous in-flight run when new commits land on the same branch.
+# The eval costs real API calls, so paying for a run whose result is already
+# superseded is pure waste.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  eval-gate:
+    name: Trajectory regression gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20   # the suite runs ~2.5 min locally; this is slack for cold caches, not a target
+
+    # Postgres WITH pgvector — the stock postgres image does not have the
+    # extension, and db.init_schema() runs CREATE EXTENSION vector, so a plain
+    # postgres image fails at schema creation. pg16 matches the local compose setup.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: ordercare
+          POSTGRES_USER: ordercare
+          POSTGRES_PASSWORD: ordercare
+        ports:
+          - 5432:5432
+        # Without this the job races the database: the runner would start
+        # ingest.py while Postgres is still booting and fail on connection refused.
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # db.py reads exactly these five (see _conn_kwargs). Host/port are the
+      # runner's localhost because GitHub maps service container ports there.
+      # NOTE: 5432 here, not the 55432 used locally — that local override exists
+      # only to dodge a host Postgres install. This is the one value that differs
+      # between laptop, CI, and RDS, which is exactly what db.py's docstring says.
+      DB_HOST: localhost
+      DB_PORT: 5432
+      DB_NAME: ordercare
+      DB_USER: ordercare
+      DB_PASSWORD: ordercare
+
+      # The eval drives the real Anthropic model, so the gate needs a real key.
+      # Repo secret, not OIDC — PLAN Stage 6 allows a static secret for the LLM
+      # provider key; only AWS credentials are required to be OIDC-only (Stage 10).
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      LLM_PROVIDER: anthropic
+
+      # Langfuse is a no-op when unset (Stage 1 made tracing degrade silently
+      # rather than crash). Set explicitly to empty so the behaviour is chosen
+      # rather than accidental — unset and empty can differ depending on the check.
+      LANGFUSE_PUBLIC_KEY: ""
+      LANGFUSE_SECRET_KEY: ""
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        # Matches requires-python >= 3.10. Pinned rather than "latest" so a new
+        # release cannot change dependency resolution underneath the gate.
+        run: uv python install 3.11
+
+      # all-MiniLM-L6-v2 is ~90MB from HuggingFace and is loaded twice per run
+      # (ingest.py embeds the docs, then the eval embeds the queries). Cache it,
+      # or every run re-downloads it and the job gets slower and flakier for no reason.
+      - name: Cache embedding model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-all-MiniLM-L6-v2-${{ runner.os }}
+
+      - name: Install dependencies
+        run: uv sync
+
+      # Schema + seed + embed + verify, all in one command. ingest.py already
+      # calls init_schema() and ends with verify(), returning non-zero if the
+      # database does not hold what the agent expects — so a bad database fails
+      # HERE, with a clear message, instead of showing up as 12 mystery eval failures.
+      - name: Ingest policy docs and seed reference data
+        run: uv run python ingest.py
+
+      # THE GATE. Runs the full suite, compares against the committed
+      # eval/baseline.json, and exits 1 if the pass rate dropped more than the
+      # baseline's threshold_pp. The step fails on that exit code — that is the
+      # entire enforcement mechanism.
+      - name: Trajectory regression gate
+        run: uv run python -m eval.regression_eval --baseline
