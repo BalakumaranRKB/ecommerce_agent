@@ -119,3 +119,123 @@ jobs:
       # entire enforcement mechanism.
       - name: Trajectory regression gate
         run: uv run python -m eval.regression_eval --baseline
+
+  # ==========================================================================
+  # Everything below only runs if the gate passed. That `needs: eval-gate` is
+  # the entire point of the assignment: a regressed trajectory does not reach
+  # ECR, let alone Fargate. Stage 7's red run stopped exactly here.
+  # ==========================================================================
+
+  build-and-push:
+    name: Build and push image to ECR
+    needs: eval-gate
+    runs-on: ubuntu-latest
+    # Pull requests run the gate but must not publish anything.
+    if: github.event_name == 'push'
+
+    permissions:
+      # Without id-token: write GitHub never mints the OIDC token and the role
+      # assumption fails with a confusing "Not authorized to perform
+      # sts:AssumeRoleWithWebIdentity". PLAN §13.
+      id-token: write
+      contents: read
+
+    outputs:
+      image: ${{ steps.build.outputs.image }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # No AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY anywhere. The role ARN is a
+      # repo VARIABLE rather than a secret on purpose: it is an identifier, not a
+      # credential, and the trust policy is scoped to this exact repo.
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Log in to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push
+        id: build
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          REPOSITORY: ordercare-agent
+          # Tagged by commit SHA, never `latest` alone (PLAN §2.6.1). A moving
+          # tag makes "which code is actually running?" unanswerable and makes
+          # rollback guesswork.
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          IMAGE="$REGISTRY/$REPOSITORY:$IMAGE_TAG"
+          # linux/amd64 explicitly: Fargate will not run arm64.
+          docker build --platform linux/amd64 -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "Pushed $IMAGE"
+
+  deploy:
+    name: Deploy to ECS Fargate
+    needs: [eval-gate, build-and-push]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+
+    permissions:
+      id-token: write
+      contents: read
+
+    env:
+      CLUSTER: ordercare-agent-cluster
+      SERVICE: ordercare-agent-service
+      TASK_FAMILY: ordercare-agent-task
+
+    steps:
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      # Read the live task definition, swap ONLY the image, register the result
+      # as a new revision. Everything else - env vars, SSM secret references,
+      # cpu/memory, log config - is carried across untouched, so CI never has to
+      # restate configuration that CloudFormation owns. This is the deploy
+      # boundary made concrete: the stack owns the infrastructure, the pipeline
+      # owns which image is running.
+      #
+      # The del(...) is required: describe-task-definition returns server-side
+      # fields that register-task-definition rejects as input.
+      - name: Register new task definition revision
+        id: taskdef
+        env:
+          IMAGE: ${{ needs.build-and-push.outputs.image }}
+        run: |
+          CURRENT=$(aws ecs describe-task-definition --task-definition "$TASK_FAMILY" --query taskDefinition)
+          UPDATED=$(echo "$CURRENT" | jq --arg IMAGE "$IMAGE" '
+            .containerDefinitions[0].image = $IMAGE
+            | del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
+                  .compatibilities, .registeredAt, .registeredBy)')
+          ARN=$(aws ecs register-task-definition \
+                  --cli-input-json "$UPDATED" \
+                  --query 'taskDefinition.taskDefinitionArn' --output text)
+          echo "arn=$ARN" >> "$GITHUB_OUTPUT"
+          echo "Registered $ARN with image $IMAGE"
+
+      - name: Update the service
+        run: |
+          aws ecs update-service \
+            --cluster "$CLUSTER" \
+            --service "$SERVICE" \
+            --task-definition "${{ steps.taskdef.outputs.arn }}" \
+            --query 'service.[serviceName,taskDefinition]' --output text
+
+      # Fail the job if the new revision never reaches steady state - otherwise a
+      # broken image would deploy "successfully" while ECS quietly rolled back to
+      # the previous task definition and the pipeline reported green.
+      - name: Wait for the deployment to stabilise
+        run: |
+          aws ecs wait services-stable --cluster "$CLUSTER" --services "$SERVICE"
+          echo "Service is stable on the new revision."
