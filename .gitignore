@@ -18,4 +18,16 @@ Thumbs.db
 .idea/
 .vscode/
 
-docs/
+# docs/ is personal scaffolding (PLAN, AWS primer, progress tracker) — not a
+# deliverable, kept local. The one exception is the confident-wrong-path
+# writeup: §2.2 requires that case reach the reviewer.
+#
+# Note `docs/*` rather than a bare `docs/`. Git does not descend into an
+# excluded DIRECTORY, so a negation for a file inside one can never take
+# effect. Excluding the CONTENTS instead keeps the directory walkable, which is
+# what lets the ! rule below actually work.
+docs/*
+!docs/confident-wrong-path.md
+
+# Eval output and captured evidence — regenerate rather than commit.
+eval/results/

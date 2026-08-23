@@ -6,8 +6,15 @@ anthropic>=0.40.0          # default LLM provider
 groq>=0.11.0               # free-tier provider for cheap iteration
 python-dotenv>=1.0.0       # loads API keys from .env
 mcp[cli]>=1.28.0,<2.0     # FastMCP server + stdio client (Stage 2+); pin to 1.x API
-chromadb>=0.5.0            # local vector store for policy-doc RAG (Stage 4)
+chromadb>=0.5.0            # local vector store for policy-doc RAG (Stage 4) — removed at A2 Stage 2
 sentence-transformers>=3.0.0  # local embeddings (all-MiniLM-L6-v2)
+
+# --- Assignment 2 additions ---
+psycopg[binary]>=3.2.0     # Postgres driver (A2 Stage 2)
+pgvector>=0.3.0            # registers the `vector` type with psycopg
+langfuse>=4.0.0,<5.0      # tracing; v4 OTEL-native rewrite — observe/get_client/propagate_attributes (A2 Stage 1)
+fastapi>=0.115.0           # POST /chat, GET /health (A2 Stage 9)
+uvicorn[standard]>=0.30.0  # ASGI server for the container
 
 # Note: sentence-transformers pulls in PyTorch (~2GB). First run also downloads
 # the ~90MB all-MiniLM-L6-v2 model.

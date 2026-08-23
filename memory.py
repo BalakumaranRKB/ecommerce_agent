@@ -25,7 +25,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-import mock_data as data
+import db
+from eval.trajectory import record
 from ticket import Ticket
 
 
@@ -37,8 +38,11 @@ def get_history(customer_id: str) -> list[dict]:
 
     Returns [] for a customer with no history — a first-time customer is a
     normal case, not an error.
+
+    Assignment 2: reads the prior_tickets table instead of a module-level dict.
+    Same signature, same return shape, same scoping — only the storage moved.
     """
-    return data.PRIOR_TICKETS.get(customer_id, [])
+    return db.fetch_prior_tickets(customer_id)
 
 
 def format_history_for_prompt(prior_tickets: list[dict]) -> str:
@@ -82,8 +86,25 @@ class Conversation:
 
     def history(self) -> list[dict]:
         """This ticket customer's prior tickets. Scoped by construction: the
-        customer_id comes from our own ticket, never from a caller."""
-        return get_history(self.ticket.customer_id)
+        customer_id comes from our own ticket, never from a caller.
+
+        Recorded as a trajectory step so a fixture can assert the agent
+        actually consulted history before referring to a past resolution —
+        otherwise an answer that cites a prior ticket is indistinguishable from
+        one that invented a plausible-sounding precedent.
+        """
+        prior = get_history(self.ticket.customer_id)
+        record(
+            "memory",
+            "prior_tickets",
+            args={"customer_id": self.ticket.customer_id},
+            outcome="ok" if prior else "empty",
+            detail={
+                "n_prior_tickets": len(prior),
+                "ticket_ids": [t["ticket_id"] for t in prior],
+            },
+        )
+        return prior
 
     def context_block(self) -> str:
         """The memory portion of the system prompt: who this ticket is for,
@@ -100,6 +121,8 @@ class Conversation:
 # Stage 5 demo — offline, deterministic. No model, no API key.
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
+    import mock_data as data
+
     # Data invariants: history must line up with the other mock stores.
     for cust_id, tickets in data.PRIOR_TICKETS.items():
         assert cust_id in data.ACCOUNTS, f"{cust_id} has history but no account"

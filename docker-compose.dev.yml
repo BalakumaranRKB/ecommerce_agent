@@ -1,0 +1,43 @@
+# Local development stack — Postgres with pgvector.
+#
+# Why this exists (see docs/PLAN-assignment-2.md §5.1): retrieval must run against
+# real Postgres + pgvector everywhere — laptop, CI, and RDS — so the agent you
+# evaluate is the agent you ship. This container is the laptop half. CI uses the
+# same image as a service container; production is RDS. The only thing that
+# changes between them is DB_HOST.
+#
+#   docker compose -f docker-compose.dev.yml up -d
+#   docker compose -f docker-compose.dev.yml down        # stop, keep data
+#   docker compose -f docker-compose.dev.yml down -v     # stop, wipe data
+#
+# Values come from .env if present, otherwise the defaults below.
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: ordercare-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-ordercare}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-ordercare_dev}
+      POSTGRES_DB: ${DB_NAME:-ordercare}
+    ports:
+      # Host port is configurable so it can be moved if 5432 is already taken
+      # (a self-hosted LangFuse stack also runs a Postgres on 5432).
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # `docker compose up -d --wait` blocks until this passes, so ingest.py
+      # never races an unready database.
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-ordercare} -d ${DB_NAME:-ordercare}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:
+
+# The `vector` extension ships with this image but still has to be enabled per
+# database. That's db.py's job in Stage 2 (CREATE EXTENSION IF NOT EXISTS vector),
+# deliberately kept in code so CI and RDS get it the same way this container does.

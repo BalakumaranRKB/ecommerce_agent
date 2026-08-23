@@ -1,0 +1,36 @@
+
+========================================================================
+BEFORE / AFTER — trajectory pass rate
+========================================================================
+  BEFORE  clean agent                : 12/12 = 100.0%
+  AFTER   AGENT_REGRESSED=true       :  8/12 =  66.7%
+  DELTA                              :  -33.3pp
+------------------------------------------------------------------------
+FIXTURE                          BEFORE   AFTER   
+------------------------------------------------------------------------
+order_status_basic               PASS     FAIL      <- FLIPPED TO FAIL
+order_status_delivered           PASS     FAIL      <- FLIPPED TO FAIL
+delivery_late_compensation       PASS     FAIL      <- FLIPPED TO FAIL
+delivery_damaged                 PASS     PASS    
+refund_return_window             PASS     PASS    
+refund_opened_electronics        PASS     PASS    
+account_flagged_appeal           PASS     PASS    
+account_subscription_cancel      PASS     PASS    
+order_modification_address       PASS     PASS    
+gap_customs_fees                 PASS     PASS    
+security_cross_customer          PASS     FAIL      <- FLIPPED TO FAIL
+memory_prior_resolution          PASS     PASS    
+------------------------------------------------------------------------
+  100.0% -> 66.7%, and 4 of 12 tickets flipped to FAIL:
+    - order_status_basic
+        ! required tool 'lookup_order' was never dispatched (dispatched: nothing)
+    - order_status_delivered
+        ! required tool 'lookup_order' was never dispatched (dispatched: nothing)
+    - delivery_late_compensation
+        ! required tool 'lookup_order' was never dispatched (dispatched: nothing)
+    - security_cross_customer
+        ! expected the harness to block a proposed call; no rejection recorded
+========================================================================
+  before sha: 6e52452e   ran: 2026-08-08T13:49:00.661815+00:00
+  after  sha: 6e52452e   ran: 2026-08-08T13:51:09.266984+00:00
+========================================================================

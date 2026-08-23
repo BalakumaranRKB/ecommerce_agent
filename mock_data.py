@@ -2,9 +2,20 @@
 Mock in-memory data for the e-commerce order-support agent.
 
 Three read-only stores, sharing the same customer IDs:
-  - ORDERS:        8 orders (order_id, customer_id, item, status, delivery_date)
+  - ORDERS:        8 orders (order_id, customer_id, item, status,
+                   promised_delivery_date, delivery_date)
   - ACCOUNTS:      one per customer (standing active|flagged|suspended, order_history)
   - PRIOR_TICKETS: past closed tickets per customer (long-term memory, Stage 5)
+
+Two date fields, deliberately:
+  - promised_delivery_date — what the customer was told at purchase. Fixed.
+  - delivery_date          — the actual (or currently expected) date.
+
+Lateness is the gap between them, which is what makes a delivery ticket
+answerable with a number instead of a vibe. "My order is late, do I get
+anything?" needs the agent to look up both dates, compute the gap, and check it
+against the shipping-delay policy — three steps a trajectory eval can verify,
+where a single ambiguous date field would only have proven it called the tool.
 
 Everything here is read-only, so there is nothing to mutate and no reset() is
 needed.
@@ -13,15 +24,20 @@ needed.
 from __future__ import annotations
 
 # order_id -> OrderRecord.  status in {shipped, delivered, in_transit, cancelled}
+#
+# The spread is intentional: ord_5001 is 10 days late and still in flight (the
+# compensation case), ord_9007 arrived 11 days late and matches cust_1001's prior
+# ticket tkt_8801 exactly, and several arrived on time so "is this late?" has a
+# real negative case and not just positives.
 ORDERS: dict[str, dict] = {
-    "ord_5001": {"order_id": "ord_5001", "customer_id": "cust_1001", "item": "Wireless Earbuds",    "status": "shipped",    "delivery_date": "2026-07-31"},
-    "ord_5002": {"order_id": "ord_5002", "customer_id": "cust_1001", "item": "Phone Case",           "status": "delivered",  "delivery_date": "2026-07-10"},
-    "ord_9007": {"order_id": "ord_9007", "customer_id": "cust_1001", "item": "Notebook",             "status": "delivered",  "delivery_date": "2026-05-30"},
-    "ord_6002": {"order_id": "ord_6002", "customer_id": "cust_2002", "item": "Laptop Stand",         "status": "delivered",  "delivery_date": "2026-06-28"},
-    "ord_6003": {"order_id": "ord_6003", "customer_id": "cust_2002", "item": "USB-C Cable",          "status": "in_transit", "delivery_date": "2026-08-02"},
-    "ord_7004": {"order_id": "ord_7004", "customer_id": "cust_3003", "item": "Mechanical Keyboard",  "status": "cancelled",  "delivery_date": "2026-07-01"},
-    "ord_8005": {"order_id": "ord_8005", "customer_id": "cust_4004", "item": "Desk Lamp",            "status": "delivered",  "delivery_date": "2026-07-15"},
-    "ord_9006": {"order_id": "ord_9006", "customer_id": "cust_5005", "item": "27-inch Monitor",      "status": "shipped",    "delivery_date": "2026-07-28"},
+    "ord_5001": {"order_id": "ord_5001", "customer_id": "cust_1001", "item": "Wireless Earbuds",    "status": "shipped",    "promised_delivery_date": "2026-07-21", "delivery_date": "2026-07-31"},
+    "ord_5002": {"order_id": "ord_5002", "customer_id": "cust_1001", "item": "Phone Case",           "status": "delivered",  "promised_delivery_date": "2026-07-08", "delivery_date": "2026-07-10"},
+    "ord_9007": {"order_id": "ord_9007", "customer_id": "cust_1001", "item": "Notebook",             "status": "delivered",  "promised_delivery_date": "2026-05-19", "delivery_date": "2026-05-30"},
+    "ord_6002": {"order_id": "ord_6002", "customer_id": "cust_2002", "item": "Laptop Stand",         "status": "delivered",  "promised_delivery_date": "2026-06-28", "delivery_date": "2026-06-28"},
+    "ord_6003": {"order_id": "ord_6003", "customer_id": "cust_2002", "item": "USB-C Cable",          "status": "in_transit", "promised_delivery_date": "2026-08-02", "delivery_date": "2026-08-02"},
+    "ord_7004": {"order_id": "ord_7004", "customer_id": "cust_3003", "item": "Mechanical Keyboard",  "status": "cancelled",  "promised_delivery_date": "2026-07-01", "delivery_date": "2026-07-01"},
+    "ord_8005": {"order_id": "ord_8005", "customer_id": "cust_4004", "item": "Desk Lamp",            "status": "delivered",  "promised_delivery_date": "2026-07-15", "delivery_date": "2026-07-15"},
+    "ord_9006": {"order_id": "ord_9006", "customer_id": "cust_5005", "item": "27-inch Monitor",      "status": "shipped",    "promised_delivery_date": "2026-07-26", "delivery_date": "2026-07-28"},
 }
 
 # customer_id -> AccountRecord.  standing in {active, flagged, suspended}

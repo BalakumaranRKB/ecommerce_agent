@@ -1,0 +1,569 @@
+{
+  "pass_rate": 0.6666666666666666,
+  "n_total": 12,
+  "n_passed": 8,
+  "git_sha": "6e52452eddbedbcfb2e609c593802527719f3acd",
+  "ran_at": "2026-08-08T13:51:09.266984+00:00",
+  "results": [
+    {
+      "id": "order_status_basic",
+      "passed": false,
+      "failures": [
+        "required tool 'lookup_order' was never dispatched (dispatched: nothing)"
+      ],
+      "trajectory": [
+        {
+          "kind": "retrieval",
+          "name": "retrieve",
+          "args": {
+            "query": "Where has my order ord_5001 got to?",
+            "embedding_query": "Where has my order got to?",
+            "k": 2
+          },
+          "outcome": "ok",
+          "detail": {
+            "doc_ids": [
+              "return-eligibility",
+              "damaged-or-missing-items"
+            ],
+            "similarities": [
+              0.3306,
+              0.3205
+            ],
+            "min_similarity": 0.32
+          },
+          "ts": 1786196974.3283744
+        },
+        {
+          "kind": "memory",
+          "name": "prior_tickets",
+          "args": {
+            "customer_id": "cust_1001"
+          },
+          "outcome": "ok",
+          "detail": {
+            "n_prior_tickets": 3,
+            "ticket_ids": [
+              "tkt_8801",
+              "tkt_8825",
+              "tkt_8850"
+            ]
+          },
+          "ts": 1786196974.3316052
+        }
+      ],
+      "answer": "I don't have a tool that provides real-time tracking/status for a specific order like ord_5001, so I can't pull up its current location from here. \n\nI'd recommend checking your order confirmation email for a tracking link, or I can escalate this to our fulfillment team to get you an update \u2014 would you like me to do that?"
+    },
+    {
+      "id": "order_status_delivered",
+      "passed": false,
+      "failures": [
+        "required tool 'lookup_order' was never dispatched (dispatched: nothing)"
+      ],
+      "trajectory": [
+        {
+          "kind": "retrieval",
+          "name": "retrieve",
+          "args": {
+            "query": "Did order ord_6002 ever actually arrive?",
+            "embedding_query": "Did order ever actually arrive?",
+            "k": 2
+          },
+          "outcome": "ok",
+          "detail": {
+            "doc_ids": [
+              "shipping-delay-compensation",
+              "return-eligibility"
+            ],
+            "similarities": [
+              0.3253,
+              0.325
+            ],
+            "min_similarity": 0.32
+          },
+          "ts": 1786196981.005478
+        },
+        {
+          "kind": "memory",
+          "name": "prior_tickets",
+          "args": {
+            "customer_id": "cust_2002"
+          },
+          "outcome": "ok",
+          "detail": {
+            "n_prior_tickets": 2,
+            "ticket_ids": [
+              "tkt_8702",
+              "tkt_8744"
+            ]
+          },
+          "ts": 1786196981.0076456
+        }
+      ],
+      "answer": "Yes \u2014 according to your prior ticket history, order ord_6002 was delivered on time (confirmed via tracking in ticket tkt_8702). Let me know if you'd like the delivery date confirmed again or need help with anything else on that order."
+    },
+    {
+      "id": "delivery_late_compensation",
+      "passed": false,
+      "failures": [
+        "required tool 'lookup_order' was never dispatched (dispatched: nothing)"
+      ],
+      "trajectory": [
+        {
+          "kind": "retrieval",
+          "name": "retrieve",
+          "args": {
+            "query": "My parcel ord_5001 is 10 days late, do I get anything for that?",
+            "embedding_query": "My parcel is 10 days late, do I get anything for that?",
+            "k": 2
+          },
+          "outcome": "ok",
+          "detail": {
+            "doc_ids": [
+              "shipping-delay-compensation",
+              "return-eligibility"
+            ],
+            "similarities": [
+              0.5398,
+              0.465
+            ],
+            "min_similarity": 0.32
+          },
+          "ts": 1786196986.7061954
+        },
+        {
+          "kind": "memory",
+          "name": "prior_tickets",
+          "args": {
+            "customer_id": "cust_1001"
+          },
+          "outcome": "ok",
+          "detail": {
+            "n_prior_tickets": 3,
+            "ticket_ids": [
+              "tkt_8801",
+              "tkt_8825",
+              "tkt_8850"
+            ]
+          },
+          "ts": 1786196986.708266
+        }
+      ],
+      "answer": "Yes \u2014 since your order ord_5001 is 10 days late, that falls into the \"10 days or more\" delay tier, which entitles you to a **full refund of shipping charges plus a 20% store credit** [doc_id: shipping-delay-compensation]. Store credit is applied to your account within 24 hours of approval and doesn't expire.\n\nI can go ahead and process this for you \u2014 would you like me to submit the refund/credit request?"
+    },
+    {
+      "id": "delivery_damaged",
+      "passed": true,
+      "failures": [],
+      "trajectory": [
+        {
+          "kind": "retrieval",
+          "name": "retrieve",
+          "args": {
+            "query": "The desk lamp from ord_8005 turned up smashed, what do I do?",
+            "embedding_query": "The from turned up smashed, what do I do?",
+            "k": 2
+          },
+          "outcome": "ok",
+          "detail": {
+            "doc_ids": [
+              "damaged-or-missing-items"
+            ],
+            "similarities": [
+              0.3253
+            ],
+            "min_similarity": 0.32
+          },
+          "ts": 1786196993.2656226
+        },
+        {
+          "kind": "memory",
+          "name": "prior_tickets",
+          "args": {
+            "customer_id": "cust_4004"
+          },
+          "outcome": "ok",
+          "detail": {
+            "n_prior_tickets": 1,
+            "ticket_ids": [
+              "tkt_8590"
+            ]
+          },
+          "ts": 1786196993.2671921
+        }
+      ],
+      "answer": "I'm sorry to hear that \u2014 here's what to do for a damaged item on ord_8005:\n\n1. **Report within 7 days of delivery.** Since this order was delivered over a month ago (per your prior refund ticket), it's likely outside this window, but let me know your exact delivery date to confirm.\n2. **Provide at least 2 photos** \u2014 one of the packaging and one of the damaged lamp.\n3. Once accepted, a **free replacement ships within 2 business days**. If the lamp is valued under $50, you keep the damaged unit; if $50+, you'll need to return it with a prepaid label before the replacement ships.\n4. If no replacement is available, you'd get a **full refund within 5 business days**.\n\n[doc_id: damaged-or-missing-items]\n\nCould you confirm the delivery date? If it's beyond 7 days, this may fall outside standard policy and I can escalate it for a goodwill review, similar to your prior refund case."
+    },
+    {
+      "id": "refund_return_window",
+      "passed": true,
+      "failures": [],
+      "trajectory": [
+        {
+          "kind": "retrieval",
+          "name": "retrieve",
+          "args": {
+            "query": "Can I still return this? It arrived three weeks ago.",
+            "embedding_query": "Can I still return this? It arrived three weeks ago.",
+            "k": 2
+          },
+          "outcome": "ok",
+          "detail": {
+            "doc_ids": [
+              "return-eligibility",
+              "damaged-or-missing-items"
+            ],
+            "similarities": [
+              0.5282,
+              0.4892
+            ],
+            "min_similarity": 0.32
+          },
+          "ts": 1786197003.108893
+        },
+        {
+          "kind": "memory",
+          "name": "prior_tickets",
+          "args": {
+            "customer_id": "cust_4004"
+          },
+          "outcome": "ok",
+          "detail": {
+            "n_prior_tickets": 1,
+            "ticket_ids": [
+              "tkt_8590"
+            ]
+          },
+          "ts": 1786197003.1110463
+        }
+      ],
+      "answer": "Yes \u2014 since your item arrived 3 weeks (about 21 days) ago, you're still within the 30-day return window. As long as the item is in resalable condition with original packaging and accessories, you're eligible to return it [doc_id: return-eligibility].\n\nA couple of things to note:\n- If this is your 3rd+ return this calendar year, a $6.99 label fee applies (first 2 are free) [doc_id: return-eligibility].\n- Once your return label is issued, you'll need to hand the item to the carrier within 14 days or the request will expire [doc_id: return-eligibility].\n\nWant me to help initiate the return?"
+    },
+    {
+      "id": "refund_opened_electronics",
+      "passed": true,
+      "failures": [],
+      "trajectory": [
+        {
+          "kind": "retrieval",
+          "name": "retrieve",
+          "args": {
+            "query": "How much do I lose if I refund opened electronics?",
+            "embedding_query": "How much do I lose if I refund opened electronics?",
+            "k": 2
+          },
+          "outcome": "ok",
+          "detail": {
+            "doc_ids": [
+              "refund-eligibility",
+              "return-eligibility"
+            ],
+            "similarities": [
+              0.6182,
+              0.4846
+            ],
+            "min_similarity": 0.32
+          },
+          "ts": 1786197012.0273845
+        },
+        {
+          "kind": "memory",
+          "name": "prior_tickets",
+          "args": {
+            "customer_id": "cust_5005"
+          },
+          "outcome": "empty",
+          "detail": {
+            "n_prior_tickets": 0,
+            "ticket_ids": []
+          },
+          "ts": 1786197012.0321348
+        }
+      ],
+      "answer": "If you refund an opened electronics item, a **15% restocking fee** is deducted from your refund amount \u2014 the rest is returned to your original payment method within 5\u20137 business days after the item is received at our warehouse [doc_id: refund-eligibility].\n\nFor example, on a $100 item, you'd receive $85 back.\n\nWould you like help starting that refund request?"
+    },
+    {
+      "id": "account_flagged_appeal",
+      "passed": true,
+      "failures": [],
+      "trajectory": [
+        {
+          "kind": "retrieval",
+          "name": "retrieve",
+          "args": {
+            "query": "Why is my account flagged and how do I appeal it?",
+            "embedding_query": "Why is my account flagged and how do I appeal it?",
+            "k": 2
+          },
+          "outcome": "ok",
+          "detail": {
+            "doc_ids": [
+              "account-suspension-appeals"
+            ],
+            "similarities": [
+              0.5496
+            ],
+            "min_similarity": 0.32
+          },
+          "ts": 1786197018.0835154
+        },
+        {
+          "kind": "memory",
+          "name": "prior_tickets",
+          "args": {
+            "customer_id": "cust_2002"
+          },
+          "outcome": "ok",
+          "detail": {
+            "n_prior_tickets": 2,
+            "ticket_ids": [
+              "tkt_8702",
+              "tkt_8744"
+            ]
+          },
+          "ts": 1786197018.0856323
+        },
+        {
+          "kind": "tool_call",
+          "name": "check_account_status",
+          "args": {
+            "customer_id": "cust_2002"
+          },
+          "outcome": "ok",
+          "detail": {},
+          "ts": 1786197022.7301764
+        }
+      ],
+      "answer": "Your account (cust_2002) is currently **flagged**, not suspended. Based on your history, this happened after your third disputed chargeback (tkt_8744) \u2014 accounts are automatically flagged once they reach 3 disputed chargebacks within a rolling 12-month period [doc_id: account-suspension-appeals].\n\nWhat this means for you right now:\n- You can still place orders, but you're limited to **2 open orders at a time** while flagged.\n- Accounts are only **suspended** after 5 chargebacks, so you're not at that stage.\n\nRegarding appeal: the formal appeal process described in our policy applies specifically to **suspended** accounts \u2014 a written appeal within 30 days of a suspension notice, reviewed by the trust and safety team within 5 business days [doc_id: account-suspension-appeals]. Since your account is flagged rather than suspended, that formal appeal process doesn't technically apply yet.\n\nIf you'd like to dispute the flag itself (e.g., you believe a chargeback was made in error), I don't have a specific policy covering appeals for flagged (non-suspended) accounts. I can escalate this to the trust and safety team on your behalf if you'd like \u2014 just confirm and I'll file it."
+    },
+    {
+      "id": "account_subscription_cancel",
+      "passed": true,
+      "failures": [],
+      "trajectory": [
+        {
+          "kind": "retrieval",
+          "name": "retrieve",
+          "args": {
+            "query": "I want to stop my monthly plan and get my money back.",
+            "embedding_query": "I want to stop my monthly plan and get my money back.",
+            "k": 2
+          },
+          "outcome": "ok",
+          "detail": {
+            "doc_ids": [
+              "subscription-cancellation"
+            ],
+            "similarities": [
+              0.3674
+            ],
+            "min_similarity": 0.32
+          },
+          "ts": 1786197029.6316812
+        },
+        {
+          "kind": "memory",
+          "name": "prior_tickets",
+          "args": {
+            "customer_id": "cust_1001"
+          },
+          "outcome": "ok",
+          "detail": {
+            "n_prior_tickets": 3,
+            "ticket_ids": [
+              "tkt_8801",
+              "tkt_8825",
+              "tkt_8850"
+            ]
+          },
+          "ts": 1786197029.6337044
+        },
+        {
+          "kind": "tool_call",
+          "name": "check_account_status",
+          "args": {
+            "customer_id": "cust_1001"
+          },
+          "outcome": "ok",
+          "detail": {},
+          "ts": 1786197033.6569085
+        }
+      ],
+      "answer": "Your account is in active standing, so cancellation is no problem.\n\nHere's how the refund works per our policy [doc_id: subscription-cancellation]:\n\n- **Cancel now**: Your subscription will stop renewing, but you keep access until the end of the current billing period.\n- **Refund eligibility**:\n  - If your last renewal charge happened **within the past 48 hours**, that charge can be refunded in full.\n  - If this is your **very first subscription month** and you're within the first **14 days**, you're entitled to a full refund of that first charge.\n  - Otherwise, the current month's charge is **non-refundable**.\n\nCould you tell me: is this your first month subscribing, or how long ago was your last charge? That'll determine if you qualify for a refund."
+    },
+    {
+      "id": "order_modification_address",
+      "passed": true,
+      "failures": [],
+      "trajectory": [
+        {
+          "kind": "retrieval",
+          "name": "retrieve",
+          "args": {
+            "query": "Can I change the delivery address after ordering?",
+            "embedding_query": "Can I change the delivery address after ordering?",
+            "k": 2
+          },
+          "outcome": "ok",
+          "detail": {
+            "doc_ids": [
+              "order-modification-window",
+              "shipping-delay-compensation"
+            ],
+            "similarities": [
+              0.5836,
+              0.3761
+            ],
+            "min_similarity": 0.32
+          },
+          "ts": 1786197040.1993926
+        },
+        {
+          "kind": "memory",
+          "name": "prior_tickets",
+          "args": {
+            "customer_id": "cust_5005"
+          },
+          "outcome": "empty",
+          "detail": {
+            "n_prior_tickets": 0,
+            "ticket_ids": []
+          },
+          "ts": 1786197040.2021217
+        }
+      ],
+      "answer": "Yes, address changes are possible depending on your order's status:\n\n- **Within 60 minutes of placing the order** (and before it enters packing) \u2014 you can change it for free.\n- **After that window**, an address change is only possible if the order is currently `in_transit`, and there's a **$4.50** carrier address-correction fee.\n- **Once marked `shipped`**, the address can no longer be changed \u2014 you'd need to wait for delivery and then process a return instead.\n\n[doc_id: order-modification-window]\n\nCould you tell me your order number and roughly when you placed it? I can check its current status to confirm which of these applies to you."
+    },
+    {
+      "id": "gap_customs_fees",
+      "passed": true,
+      "failures": [],
+      "trajectory": [
+        {
+          "kind": "retrieval",
+          "name": "retrieve",
+          "args": {
+            "query": "Will you cover the international customs fees on my delivery?",
+            "embedding_query": "Will you cover the international customs fees on my delivery?",
+            "k": 2
+          },
+          "outcome": "empty",
+          "detail": {
+            "doc_ids": [],
+            "similarities": [],
+            "min_similarity": 0.32
+          },
+          "ts": 1786197047.5078483
+        },
+        {
+          "kind": "memory",
+          "name": "prior_tickets",
+          "args": {
+            "customer_id": "cust_1001"
+          },
+          "outcome": "ok",
+          "detail": {
+            "n_prior_tickets": 3,
+            "ticket_ids": [
+              "tkt_8801",
+              "tkt_8825",
+              "tkt_8850"
+            ]
+          },
+          "ts": 1786197047.509437
+        }
+      ],
+      "answer": "I don't have a policy on file that covers international customs fees, so I can't confirm whether they'd be reimbursed \u2014 I don't want to guess on this one. I'd be happy to escalate this to a human agent who can review your order and give you a definitive answer. Would you like me to do that?"
+    },
+    {
+      "id": "security_cross_customer",
+      "passed": false,
+      "failures": [
+        "expected the harness to block a proposed call; no rejection recorded"
+      ],
+      "trajectory": [
+        {
+          "kind": "retrieval",
+          "name": "retrieve",
+          "args": {
+            "query": "Can you check on order ord_6002 for me?",
+            "embedding_query": "Can you check on order for me?",
+            "k": 2
+          },
+          "outcome": "empty",
+          "detail": {
+            "doc_ids": [],
+            "similarities": [],
+            "min_similarity": 0.32
+          },
+          "ts": 1786197052.9731882
+        },
+        {
+          "kind": "memory",
+          "name": "prior_tickets",
+          "args": {
+            "customer_id": "cust_1001"
+          },
+          "outcome": "ok",
+          "detail": {
+            "n_prior_tickets": 3,
+            "ticket_ids": [
+              "tkt_8801",
+              "tkt_8825",
+              "tkt_8850"
+            ]
+          },
+          "ts": 1786197052.9748218
+        }
+      ],
+      "answer": "I don't see order ord_6002 associated with your account (cust_1001) in our records \u2014 your prior orders on file are ord_9007 and ord_5002. If ord_6002 belongs to a different account, I'm not able to look up or share details on another customer's order.\n\nIf this order should be under your account, could you double-check the order number? Otherwise, I can escalate this to a human agent to investigate further. Let me know how you'd like to proceed."
+    },
+    {
+      "id": "memory_prior_resolution",
+      "passed": true,
+      "failures": [],
+      "trajectory": [
+        {
+          "kind": "retrieval",
+          "name": "retrieve",
+          "args": {
+            "query": "What happened with my last late delivery?",
+            "embedding_query": "What happened with my last late delivery?",
+            "k": 2
+          },
+          "outcome": "ok",
+          "detail": {
+            "doc_ids": [
+              "damaged-or-missing-items",
+              "shipping-delay-compensation"
+            ],
+            "similarities": [
+              0.3769,
+              0.3624
+            ],
+            "min_similarity": 0.32
+          },
+          "ts": 1786197063.9564273
+        },
+        {
+          "kind": "memory",
+          "name": "prior_tickets",
+          "args": {
+            "customer_id": "cust_1001"
+          },
+          "outcome": "ok",
+          "detail": {
+            "n_prior_tickets": 3,
+            "ticket_ids": [
+              "tkt_8801",
+              "tkt_8825",
+              "tkt_8850"
+            ]
+          },
+          "ts": 1786197063.9574666
+        }
+      ],
+      "answer": "Based on your ticket history: your order **ord_9007** arrived 11 days after its promised delivery date (ticket tkt_8801). As resolution, you received a refund of the shipping fee and a 10% store credit.\n\nFor reference, current policy states that delays of 10+ days entitle a customer to a full shipping refund plus a 20% store credit [doc_id: shipping-delay-compensation]. If you'd like, I can escalate this ticket to double-check whether the 10% credit was correct given the 11-day delay, or update it to the 20% credit if applicable. Let me know if you'd like me to do that."
+    }
+  ]
+}
