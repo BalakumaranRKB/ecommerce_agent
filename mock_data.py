@@ -228,6 +228,13 @@ CUSTOMER_PII: dict[str, dict] = {
 #                                        correlation case for §2.5.
 #   req_r006  ord_7004  4,999   UNDER, cancelled order -> full refund path
 #   req_r007  ord_5002  5,000   EXACTLY AT threshold -> forces a >= vs > decision
+#   req_r008  ord_6003    599   UNDER + FLAGGED customer -> the dropped-handoff
+#                                        CWP flip case: amount alone would
+#                                        auto-approve, so account_standing is
+#                                        the ONLY thing routing it to HITL.
+#                                        Drop the standing in the handoff and
+#                                        the decision flips approve<->escalate.
+#                                        (docs/dropped-handoff-found.md)
 # ===========================================================================
 REFUND_REQUESTS: dict[str, dict] = {
     "req_r001": {"request_id": "req_r001", "order_id": "ord_5001", "customer_id": "cust_1001", "amount": 2499,  "reason": "Earbuds arrived 10 days late, requesting partial refund",                       "status": "pending"},
@@ -237,6 +244,7 @@ REFUND_REQUESTS: dict[str, dict] = {
     "req_r005": {"request_id": "req_r005", "order_id": "ord_6002", "customer_id": "cust_2002", "amount": 8990,  "reason": "Duplicate follow-up on the laptop stand refund (same order as req_r004)",       "status": "pending"},
     "req_r006": {"request_id": "req_r006", "order_id": "ord_7004", "customer_id": "cust_3003", "amount": 4999,  "reason": "Cancelled before shipping, full refund on the keyboard",                        "status": "pending"},
     "req_r007": {"request_id": "req_r007", "order_id": "ord_5002", "customer_id": "cust_1001", "amount": 5000,  "reason": "Phone case defective; refund exactly at the policy line",                       "status": "pending"},
+    "req_r008": {"request_id": "req_r008", "order_id": "ord_6003", "customer_id": "cust_2002", "amount": 599,   "reason": "USB-C cable arrived dead, small refund on a flagged account",                    "status": "pending"},
 }
 
 

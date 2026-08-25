@@ -31,3 +31,6 @@ docs/*
 
 # Eval output and captured evidence — regenerate rather than commit.
 eval/results/
+
+
+.bedrock_agentcore.yaml

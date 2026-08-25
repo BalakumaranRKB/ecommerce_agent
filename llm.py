@@ -132,6 +132,71 @@ class GroqProvider(Provider):
             messages.append({"role": "tool", "tool_call_id": tc.id, "content": results[tc.id]})
 
 
+class BedrockProvider(Provider):
+    # Global cross-region inference profile for Claude Sonnet 4.6.
+    # Swap to "global.anthropic.claude-sonnet-5" once Sonnet 5 access is enabled.
+    MODEL = "global.anthropic.claude-sonnet-4-6"
+
+    def __init__(self):
+        import boto3
+        self._client = boto3.client('bedrock-runtime', region_name='ap-south-1')
+
+    def create(self, system, messages, tools=None):
+        bedrock_messages = []
+        for m in messages:
+            if isinstance(m["content"], str):
+                bedrock_messages.append({"role": m["role"], "content": [{"text": m["content"]}]})
+            else:
+                bedrock_messages.append(m)
+
+        kwargs = {
+            "modelId": self.MODEL,
+            "system": [{"text": system}],
+            "messages": bedrock_messages,
+        }
+        if tools:
+            bedrock_tools = []
+            for t in tools:
+                if "toolSpec" in t:
+                    bedrock_tools.append(t)
+                else:
+                    bedrock_tools.append({
+                        "toolSpec": {
+                            "name": t["name"],
+                            "description": t["description"],
+                            "inputSchema": {"json": t.get("input_schema") or t.get("parameters")}
+                        }
+                    })
+            kwargs["toolConfig"] = {"tools": bedrock_tools}
+
+        resp = self._client.converse(**kwargs)
+        
+        tool_calls = []
+        text = ""
+        for block in resp['output']['message']['content']:
+            if 'text' in block:
+                text += block['text']
+            elif 'toolUse' in block:
+                tu = block['toolUse']
+                tool_calls.append(ToolCall(id=tu['toolUseId'], name=tu['name'], input=tu['input']))
+                
+        stop_reason = "tool_use" if resp['stopReason'] == "tool_use" else "end"
+        
+        return ModelResponse(stop_reason=stop_reason, text=text, tool_calls=tool_calls, raw=resp['output']['message'])
+
+    def append_assistant_turn(self, messages, response):
+        messages.append({"role": "assistant", "content": response.raw['content']})
+
+    def append_tool_results(self, messages, response, results):
+        messages.append({
+            "role": "user",
+            "content": [
+                {"toolResult": {"toolUseId": tc.id, "content": [{"text": results[tc.id]}]}}
+                for tc in response.tool_calls
+            ],
+        })
+
+
 def get_provider(name: str | None = None) -> Provider:
     # Provider is config, not code: default comes from LLM_PROVIDER in .env,
     # so switching backends never touches the harness/tool/RAG code.
@@ -140,7 +205,9 @@ def get_provider(name: str | None = None) -> Provider:
         return AnthropicProvider()
     if name == "groq":
         return GroqProvider()
-    raise ValueError(f"Unknown provider: {name!r} (expected 'anthropic' or 'groq')")
+    if name == "bedrock":
+        return BedrockProvider()
+    raise ValueError(f"Unknown provider: {name!r} (expected 'anthropic', 'groq', or 'bedrock')")
 
 
 if __name__ == "__main__":
@@ -149,7 +216,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Provider seam smoke test.")
     parser.add_argument(
         "--provider",
-        choices=["anthropic", "groq"],
+        choices=["anthropic", "groq", "bedrock"],
         default=os.getenv("LLM_PROVIDER", "anthropic"),
     )
     args = parser.parse_args()

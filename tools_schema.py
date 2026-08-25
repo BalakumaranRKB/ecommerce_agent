@@ -97,7 +97,15 @@ def _to_groq_tools(specs):
     ]
 
 
+def _to_bedrock_tools(specs):
+    return [
+        {"toolSpec": {"name": s["name"], "description": s["description"], "inputSchema": {"json": s["parameters"]}}}
+        for s in specs
+    ]
+
+
 TOOLS_BY_PROVIDER = {
     "anthropic": _to_anthropic_tools(TOOL_SPECS),
     "groq": _to_groq_tools(TOOL_SPECS),
+    "bedrock": _to_bedrock_tools(TOOL_SPECS),
 }

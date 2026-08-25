@@ -34,7 +34,7 @@ def main() -> int:
     parser.add_argument("--type", choices=TICKET_TYPES, default="refund",
                         help="Initial ticket type; may be reclassified per turn in logs.")
     parser.add_argument("--provider", default=os.getenv("LLM_PROVIDER", "anthropic"),
-                        choices=["anthropic", "groq"])
+                        choices=["anthropic", "groq", "bedrock"])
     args = parser.parse_args()
 
     ticket = Ticket(ticket_id=args.ticket_id, customer_id=args.customer, ticket_type=args.type)
