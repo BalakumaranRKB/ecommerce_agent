@@ -49,16 +49,11 @@ SPECIALIST_URL = "http://localhost:5001"
 _CLIENT_CONFIG = ClientConfig(supported_protocol_bindings=[TransportProtocol.HTTP_JSON])
 
 
-async def send_dispute_to_specialist(
-    request: DisputeRequest,
-) -> DisputeResult:
-    """Send a DisputeRequest to the billing specialist via A2A and return
-    the typed DisputeResult.
-
-    This is an async function because the a2a-sdk client is async.
-    The caller (agent.py) runs it with asyncio.run() from the sync context.
+async def _send_part_and_get_result(part_text: str, order_id: str) -> DisputeResult:
+    """Send one JSON text part to the specialist over A2A and return the typed
+    DisputeResult from the response artifact. Shared by the dispute-settle and
+    resume calls -- both send a single JSON Part and read back a DisputeResult.
     """
-    # Build the A2A message with the dispute request as a JSON part.
     # message_id is REQUIRED by the server's REST validation layer (not
     # optional despite proto3 not enforcing it at construction time) --
     # every A2A message needs a unique id for protocol-level tracking
@@ -69,7 +64,7 @@ async def send_dispute_to_specialist(
         message_id=str(uuid.uuid4()),
         role=Role.ROLE_USER,
         parts=[
-            Part(text=request.to_json()),
+            Part(text=part_text),
         ],
     )
 
@@ -111,8 +106,7 @@ async def send_dispute_to_specialist(
 
         if result_data is None:
             raise RuntimeError(
-                f"No DisputeResult received from specialist for "
-                f"order {request.order_id}"
+                f"No DisputeResult received from specialist for order {order_id}"
             )
 
         return DisputeResult.from_json(result_data)
@@ -121,26 +115,60 @@ async def send_dispute_to_specialist(
         await client.close()
 
 
+async def send_dispute_to_specialist(
+    request: DisputeRequest,
+) -> DisputeResult:
+    """Send a DisputeRequest to the billing specialist via A2A and return
+    the typed DisputeResult.
+
+    This is an async function because the a2a-sdk client is async.
+    The caller (agent.py) runs it with asyncio.run() from the sync context.
+    """
+    return await _send_part_and_get_result(request.to_json(), request.order_id)
+
+
+async def send_resume_to_specialist(
+    order_id: str, human_action: str,
+) -> DisputeResult:
+    """Action a human's approve/reject on a PAUSED refund, over A2A.
+
+    Same message:send endpoint as a dispute, distinguished by an {"op":"resume"}
+    payload the specialist's executor branches on. Returns the DisputeResult the
+    settlement produced (settlement_outcome tells you executed / rejected /
+    state_changed / duplicate_blocked / expired).
+    """
+    payload = json.dumps({"op": "resume", "order_id": order_id, "human_action": human_action})
+    return await _send_part_and_get_result(payload, order_id)
+
+
 def send_dispute_sync(request: DisputeRequest) -> DisputeResult:
     """Synchronous wrapper around send_dispute_to_specialist.
 
     The main agent's Session.answer_turn() is synchronous, so this bridge
     lets it call the async A2A client without restructuring the harness loop.
     """
+    return _run_sync(send_dispute_to_specialist(request))
+
+
+def send_resume_sync(order_id: str, human_action: str) -> DisputeResult:
+    """Synchronous wrapper around send_resume_to_specialist (human approve/reject
+    on a paused refund)."""
+    return _run_sync(send_resume_to_specialist(order_id, human_action))
+
+
+def _run_sync(coro):
+    """Run an async coroutine from a sync context, even if an event loop is
+    already running (then use a worker thread)."""
     import asyncio
 
-    # Handle the case where an event loop is already running
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         loop = None
 
     if loop is not None:
-        # We're inside an async context — use a new thread
         import concurrent.futures
         with concurrent.futures.ThreadPoolExecutor() as pool:
-            return pool.submit(
-                asyncio.run, send_dispute_to_specialist(request)
-            ).result()
+            return pool.submit(asyncio.run, coro).result()
     else:
-        return asyncio.run(send_dispute_to_specialist(request))
+        return asyncio.run(coro)

@@ -32,10 +32,14 @@ from dataclasses import dataclass, field
 import db
 from a2a_client import send_dispute_sync
 from billing_specialist.schemas import DisputeRequest, DisputeResult
+from cost_ledger import ledger_context
+from decisions import RefundDecision
 from eval.trajectory import Trajectory, record, recording
 from harness import db_owner_resolver, make_mcp_dispatch, run_harnessed
 from memory import Conversation
+from pii import mask
 from retriever import PolicyRetriever
+from semantic_cache import SemanticCache
 from ticket import TICKET_TYPES, Ticket
 from tools_schema import TOOLS_BY_PROVIDER
 from tracing import current_trace_id, observe, trace_context
@@ -83,11 +87,12 @@ CLASSIFY_PROMPT = (
 def classify_ticket(provider, message: str) -> str:
     """Return one of TICKET_TYPES. Falls back to 'order_status' if the model
     replies with anything unexpected — better a default than a crash."""
-    resp = provider.create(
-        system=CLASSIFY_PROMPT,
-        messages=[{"role": "user", "content": message}],
-        tools=[],
-    )
+    with ledger_context(ticket_id="classify", ticket_type="unclassified", step="classify"):
+        resp = provider.create(
+            system=CLASSIFY_PROMPT,
+            messages=[{"role": "user", "content": message}],
+            tools=[],
+        )
     label = (resp.text or "").strip().lower().split()[0] if resp.text else ""
     label = label.strip(".,:;!?")
     return label if label in TICKET_TYPES else "order_status"
@@ -101,7 +106,7 @@ class Session:
     ticket: Ticket
     provider: object
     provider_name: str = "anthropic"
-    retriever: PolicyRetriever | None = None
+    retriever: PolicyRetriever | SemanticCache | None = None
     conversation: Conversation = field(init=False)
     # Set after each turn; POST /chat returns it (§6.7) so an answer can be tied
     # back to the trace that produced it. None when tracing is off.
@@ -109,11 +114,21 @@ class Session:
     # Set after each turn; what the eval scores. Distinct from the LangFuse
     # trace on purpose (PLAN §5.4) — same events, two audiences, no coupling.
     last_trajectory: Trajectory | None = field(default=None, init=False)
+    # Set whenever a refund turn completes a handoff (Phase 4 / spec §2.7).
+    # This -- not the prose the customer reads -- is the source of truth for
+    # the turn's refund decision: a typed RefundDecision mapped straight from
+    # the specialist's typed DisputeResult, never parsed out of a sentence.
+    # None whenever no refund decision was produced this turn (no pending
+    # refund found, or the handoff failed and was degraded to an escalation).
+    last_refund_decision: RefundDecision | None = field(default=None, init=False)
 
     def __post_init__(self):
         self.conversation = Conversation(ticket=self.ticket)
+        # Wrap retriever in SemanticCache (Phase 7 / spec §2.9) if not already cached
         if self.retriever is None:
-            self.retriever = PolicyRetriever()
+            self.retriever = SemanticCache(retriever=PolicyRetriever())
+        elif not isinstance(self.retriever, SemanticCache):
+            self.retriever = SemanticCache(retriever=self.retriever)
         self._resolve_owner = db_owner_resolver()
         self._dispatch = make_mcp_dispatch(self.ticket)
 
@@ -253,6 +268,28 @@ class Session:
                 "requires_human_review": result.requires_human_review,
             },
         )
+
+        # Phase 4 / spec §2.7: map the specialist's typed DisputeResult into
+        # the main agent's typed RefundDecision. This is a MAPPING of an
+        # already-made verdict, not a second decision -- the specialist is
+        # the single source of truth for the refund verdict. From here on,
+        # `decision.amount` (an int, Pydantic-validated) is what the rest of
+        # this turn should trust, not any number that ends up in the
+        # customer-facing prose built below.
+        decision = RefundDecision.from_dispute_result(result)
+        self.last_refund_decision = decision
+        record(
+            "tool_call",
+            "refund_decision",
+            detail={
+                "order_id": decision.order_id,
+                "amount": decision.amount,
+                "action": decision.action,
+                "requires_human": decision.requires_human,
+                "policy_outcome": getattr(result, "policy_outcome", None),
+                "settlement_outcome": getattr(result, "settlement_outcome", None),
+            },
+        )
         return result
 
     def answer_turn(self, user_message: str) -> str:
@@ -269,12 +306,20 @@ class Session:
         """
         with recording() as trajectory:
             with trace_context(self.ticket):
-                answer = self._run_turn(user_message)
-                self.last_trace_id = current_trace_id()
+                t_type = getattr(self.ticket, "ticket_type", "unclassified") or "unclassified"
+                with ledger_context(ticket_id=self.ticket.ticket_id, ticket_type=t_type, step="turn_execution"):
+                    answer = self._run_turn(user_message)
+                    self.last_trace_id = current_trace_id()
         self.last_trajectory = trajectory
-        return answer
+        # §4.2 egress: mask the customer-facing reply before it leaves the system.
+        # (Full entity-tag replacement per §4.4 — the documented redaction choice.)
+        return mask(answer)
 
     def _run_turn(self, user_message: str) -> str:
+        # Reset per turn -- otherwise a later non-refund turn would still
+        # show a stale RefundDecision left over from an earlier turn.
+        self.last_refund_decision = None
+
         # 1. Append the customer message to the buffer.
         self.conversation.add_user(user_message)
 
@@ -296,30 +341,49 @@ class Session:
             if refund_request is not None:
                 try:
                     result = self.hand_off_to_billing(refund_request)
+                    # Phase 5: the specialist now SETTLES, not just decides --
+                    # result.settlement_outcome says what actually happened at
+                    # the execution seam. Phrase THAT for the customer, not just
+                    # the verdict. (Falls back gracefully if a pre-Phase-5
+                    # specialist without settlement fields ever answers.)
+                    settlement = getattr(result, "settlement_outcome", None)
                     specialist_block = (
-                        "\n\nBILLING SPECIALIST DECISION (authoritative — do not "
+                        "\n\nBILLING SPECIALIST OUTCOME (authoritative — do not "
                         "override; phrase this for the customer):\n"
                         f"  action: {result.action}\n"
                         f"  approved: {result.approved}\n"
                         f"  requires_human_review: {result.requires_human_review}\n"
                         f"  refund_amount: INR {result.refund_amount:,}\n"
+                        f"  settlement_outcome: {settlement}\n"
                         f"  reasoning: {result.reasoning}\n"
-                        "If requires_human_review is true, tell the customer the "
-                        "request has been escalated for review rather than "
-                        "promising an outcome. If approved is true, confirm the "
-                        "refund. If neither, explain it could not be approved."
+                        "Phrase strictly by settlement_outcome:\n"
+                        "  - 'executed': the refund has been approved AND processed; "
+                        "confirm it to the customer.\n"
+                        "  - 'pending_approval': it has been escalated for human "
+                        "review; say so and do NOT promise an outcome.\n"
+                        "  - 'rejected': it could not be approved; explain briefly "
+                        "without inventing a reason.\n"
+                        "  - 'duplicate_blocked': a refund on this order is already "
+                        "in progress or paid; tell the customer no second refund "
+                        "was issued.\n"
+                        "  - 'state_changed': the order changed while under review, "
+                        "so it needs another look; say it's been sent back for review.\n"
+                        "  - 'expired': the review window lapsed; say it will be "
+                        "re-submitted for review.\n"
+                        "If settlement_outcome is empty, fall back to "
+                        "requires_human_review/approved as before."
                     )
                 except Exception as e:  # noqa: BLE001
                     # The handoff CAN fail (the specialist is a separate
                     # process -- the honest cost named in autonomy-decision.md).
                     # Degrade to an explicit escalation rather than guessing at
                     # a refund decision the main agent has no authority to make.
-                    print(f"  [HANDOFF] FAILED: {e}")
+                    print(f"  [HANDOFF] FAILED: {mask(str(e))}")
                     record(
                         "tool_call",
                         "hand_off_to_billing",
                         outcome="error",
-                        detail={"error": str(e)},
+                        detail={"error": mask(str(e))},  # §4.2: error-path egress
                     )
                     specialist_block = (
                         "\n\nBILLING SPECIALIST UNREACHABLE: the refund decision "

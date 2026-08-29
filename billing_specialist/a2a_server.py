@@ -48,6 +48,7 @@ from a2a.types import (
 from a2a.utils.constants import TransportProtocol
 
 from billing_specialist.agent import resolve_dispute
+from billing_specialist.settlement import settle_dispute, resume_settlement
 from billing_specialist.schemas import DisputeRequest, DisputeResult
 
 
@@ -86,42 +87,59 @@ class BillingSpecialistExecutor(AgentExecutor):
             )
             return
 
-        # Find the JSON part with the DisputeRequest
-        dispute_request_json = None
+        # Find the JSON part carrying either a DisputeRequest (settle) or a
+        # resume instruction ({"op":"resume", ...}). Both carry "order_id".
+        payload_json = None
         for part in message.parts:
             if part.text:
                 try:
                     data = json.loads(part.text)
-                    if "order_id" in data and "refund_amount" in data:
-                        dispute_request_json = part.text
+                    if isinstance(data, dict) and "order_id" in data:
+                        payload_json = part.text
                         break
                 except (json.JSONDecodeError, TypeError):
                     continue
 
-        if dispute_request_json is None:
+        if payload_json is None:
             await event_queue.enqueue_event(
                 TaskStatusUpdateEvent(
                     status=TaskStatus(
                         state=TaskState.TASK_STATE_FAILED,
                         message=Message(
                             role=Role.ROLE_AGENT,
-                            parts=[Part(text="No DisputeRequest found in message parts.")],
+                            parts=[Part(text="No DisputeRequest or resume instruction found in message parts.")],
                         ),
                     )
                 )
             )
             return
 
-        # Parse, resolve, and return
+        # Parse, run the right operation, and return.
+        # Phase 5: the executor runs the specialist's SETTLEMENT seam, not just
+        # the verdict -- settle_dispute() decides, authorizes the amount, then
+        # executes or pauses; resume_settlement() actions a human's approve/reject
+        # on a paused refund. The verdict fields (action/approved/hitl) in the
+        # returned DisputeResult are unchanged from resolve_dispute(), so the
+        # existing round-trip contract still holds; settlement_outcome is added.
         try:
-            dispute_request = DisputeRequest.from_json(dispute_request_json)
-            print(f"  [SPECIALIST] Received dispute: {dispute_request.order_id} / "
-                  f"{dispute_request.customer_id} / INR {dispute_request.refund_amount:,} / "
-                  f"standing={dispute_request.account_standing}")
+            data = json.loads(payload_json)
+            if data.get("op") == "resume":
+                order_id = data["order_id"]
+                human_action = data.get("human_action", "approve")
+                print(f"  [SPECIALIST] Resume: {order_id} / human_action={human_action}")
+                result = resume_settlement(order_id, human_action)
+                artifact_order_id = order_id
+            else:
+                dispute_request = DisputeRequest.from_json(payload_json)
+                print(f"  [SPECIALIST] Received dispute: {dispute_request.order_id} / "
+                      f"{dispute_request.customer_id} / INR {dispute_request.refund_amount:,} / "
+                      f"standing={dispute_request.account_standing}")
+                result = settle_dispute(dispute_request)
+                artifact_order_id = dispute_request.order_id
 
-            result = resolve_dispute(dispute_request)
             print(f"  [SPECIALIST] Decision: {result.action} "
-                  f"(approved={result.approved}, hitl={result.requires_human_review})")
+                  f"(approved={result.approved}, hitl={result.requires_human_review}, "
+                  f"settlement={result.settlement_outcome})")
 
         except Exception as e:
             await event_queue.enqueue_event(
@@ -162,9 +180,9 @@ class BillingSpecialistExecutor(AgentExecutor):
                 task_id=task_id,
                 context_id=context_id,
                 artifact=Artifact(
-                    artifact_id=f"dispute-result-{dispute_request.order_id}",
+                    artifact_id=f"dispute-result-{artifact_order_id}",
                     name="DisputeResult",
-                    description=f"Dispute resolution for order {dispute_request.order_id}",
+                    description=f"Dispute resolution for order {artifact_order_id}",
                     parts=[Part(text=result.to_json())],
                 ),
             )

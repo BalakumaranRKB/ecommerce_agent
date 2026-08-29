@@ -10,7 +10,7 @@ scrutiny, and confidently approves refunds it should have escalated.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Literal
+from typing import Literal, Optional
 
 import json
 
@@ -55,6 +55,16 @@ class DisputeResult:
     refund_amount: int
     reasoning: str
     action: Literal["approve", "reject", "escalate_hitl"]
+    # Phase 5 (spec §2.5/§2.6): what the specialist's execution seam actually DID
+    # after the verdict -- authorize+execute, pause for a human, or block. These
+    # are additive and optional: a bare verdict from resolve_dispute() (and every
+    # pre-Phase-5 caller/test) leaves them None, and to_json/from_json round-trip
+    # unchanged. See billing_specialist/settlement.py.
+    settlement_outcome: Optional[Literal[
+        "executed", "pending_approval", "rejected", "duplicate_blocked",
+        "state_changed", "expired",
+    ]] = None
+    policy_outcome: Optional[Literal["allow", "needs_approval"]] = None
 
     def to_json(self) -> str:
         return json.dumps(asdict(self))

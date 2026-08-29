@@ -1,24 +1,26 @@
 """
-Ingest — embed the policy docs and seed the reference tables, ONCE.
+Ingest — seed the reference tables, ONCE.
 
-Deliberately a command you run, not something the agent does at startup
-(docs/PLAN-assignment-2.md §5.5). Assignment 1 rebuilt its index in memory on
-every boot, which was free and correct when the index lived inside one process.
-Now the index is shared state in a database, and startup-ingest would mean:
+CHANGED IN ASSIGNMENT 3: policy-doc embedding is GONE from here. In A2 this
+script embedded the seven policy docs locally (sentence-transformers) and wrote
+their vectors into the pgvector `policy_chunks` table. In A3 retrieval is a
+managed Bedrock Knowledge Base — the KB owns embedding and the vector store, and
+its corpus is synced from S3 (see Phase 0 / docs/phase-0-findings.md). So there
+is nothing for this script to embed anymore.
 
-  - every Fargate task re-embedding the same seven documents on boot,
-  - that work landing at the worst moment, since a task is spawned precisely
-    because load spiked and it should be answering, not embedding, and
-  - concurrent tasks racing to write identical rows.
+What remains is the OTHER half of ingest: seeding the reference tables
+(accounts, orders, prior tickets) into Postgres. The agent's tools and the
+billing handoff still read these through db.fetch_* accessors, so they must be
+present. This is deliberately a command you run, not startup work — tasks read,
+ingest writes (docs/PLAN-assignment-2.md §5.5).
 
-So: ingest writes, tasks only read.
+Idempotent — seeding is upserts, so re-running refreshes rows in place.
 
-Idempotent — every write is an upsert, so re-running after editing a policy doc
-refreshes it in place. That matters because the honest-gap behaviour depends on
-what is IN the corpus; a stale row silently changes what the agent can answer.
-
-    uv run python ingest.py            # embed docs + seed reference data
+    uv run python ingest.py            # seed reference data
     uv run python ingest.py --verify   # re-check what's in the database
+
+To (re)load the policy corpus into the Knowledge Base, sync its S3 data source
+in the Bedrock console instead — that path no longer runs through this script.
 """
 
 from __future__ import annotations
@@ -28,40 +30,13 @@ import sys
 
 import db
 import mock_data as data
-from retriever import DOCS_DIR, SentenceTransformerEmbedder, load_policy_docs
-
-
-def ingest_policy_docs(docs_dir: str = DOCS_DIR) -> int:
-    """Embed every policy doc and upsert it into policy_chunks."""
-    docs = load_policy_docs(docs_dir)
-    print(f"[ingest] loaded {len(docs)} policy docs from {docs_dir}")
-
-    embedder = SentenceTransformerEmbedder()
-    print(f"[ingest] embedding with {embedder.model_name} (first run downloads ~90MB)...")
-    embeddings = embedder([d["text"] for d in docs])
-
-    dim = len(embeddings[0])
-    if dim != db.EMBED_DIM:
-        raise SystemExit(
-            f"[ingest] FATAL: model produced {dim}-dim vectors but policy_chunks.embedding "
-            f"is vector({db.EMBED_DIM}). Changing embedding model means changing the column "
-            f"type AND re-tuning MIN_SIMILARITY — the threshold does not transfer."
-        )
-
-    for doc, embedding in zip(docs, embeddings):
-        db.upsert_policy_chunk(doc["doc_id"], doc["title"], doc["text"], embedding)
-        print(f"[ingest]   + {doc['doc_id']}")
-    return len(docs)
 
 
 def verify() -> bool:
-    """Prove the database holds what the agent expects. Returns True if sane."""
+    """Prove the database holds the reference data the agent expects. Returns
+    True if sane. (Policy retrieval is verified separately by running
+    retriever.py against the live Knowledge Base.)"""
     ok = True
-
-    n_chunks = db.count_policy_chunks()
-    expected_chunks = len(load_policy_docs())
-    print(f"[verify] policy_chunks : {n_chunks} (expected {expected_chunks})")
-    ok &= n_chunks == expected_chunks
 
     # Spot-check the reference tables through the same accessors the agent uses,
     # so this verifies the read path and not just the row counts.
@@ -94,7 +69,7 @@ def verify() -> bool:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Embed policy docs and seed reference data.")
+    parser = argparse.ArgumentParser(description="Seed reference data into Postgres.")
     parser.add_argument("--verify", action="store_true", help="Only re-check the database.")
     args = parser.parse_args()
 
@@ -107,10 +82,7 @@ def main() -> int:
     n_acct, n_ord, n_tkt = db.seed_reference_data(
         data.ACCOUNTS, data.ORDERS, data.PRIOR_TICKETS
     )
-    print(f"[ingest] seeded {n_acct} accounts, {n_ord} orders, {n_tkt} prior tickets")
-
-    n_docs = ingest_policy_docs()
-    print(f"[ingest] embedded {n_docs} policy docs\n")
+    print(f"[ingest] seeded {n_acct} accounts, {n_ord} orders, {n_tkt} prior tickets\n")
 
     print("[ingest] verifying...")
     ok = verify()

@@ -70,21 +70,28 @@ def _conn_kwargs() -> dict:
         "dbname": os.getenv("DB_NAME", "ordercare"),
         "user": os.getenv("DB_USER", "ordercare"),
         "password": os.getenv("DB_PASSWORD", ""),
+        "connect_timeout": int(os.getenv("DB_CONNECT_TIMEOUT", "2")),
     }
 
 
-def get_conn() -> psycopg.Connection:
+def get_conn() -> psycopg.Connection | None:
     """The process-wide connection, opened on first use and reused after.
 
     autocommit=True because every statement here is either a one-shot read or
     an idempotent seed write; there is no multi-statement transaction to
     manage, and it keeps callers from having to remember to commit.
+
+    Returns None when Postgres is unreachable (e.g. cloud runtime / mock mode).
     """
     global _conn
-    if _conn is None or _conn.closed:
+    if _conn is not None and not _conn.closed:
+        return _conn
+    try:
         _conn = psycopg.connect(**_conn_kwargs(), autocommit=True, row_factory=dict_row)
         _register_vector(_conn)
-    return _conn
+        return _conn
+    except Exception:
+        return None
 
 
 def _register_vector(conn: psycopg.Connection) -> None:
@@ -217,12 +224,19 @@ def count_policy_chunks() -> int:
 
 
 def fetch_order(order_id: str) -> dict | None:
-    """One order by id, or None. Returns ALL columns including both dates \u2014
+    """One order by id, or None. Returns ALL columns including both dates —
     the gap between promised_delivery_date and delivery_date is how a delivery
     ticket gets answered with a number instead of a status word."""
-    with get_conn().cursor() as cur:
-        cur.execute("SELECT * FROM orders WHERE order_id = %s", (order_id,))
-        return cur.fetchone()
+    conn = get_conn()
+    if conn is not None:
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT * FROM orders WHERE order_id = %s", (order_id,))
+                return cur.fetchone()
+        except Exception:
+            pass
+    import mock_data
+    return mock_data.ORDERS.get(order_id)
 
 
 def fetch_order_owner(order_id: str) -> str | None:
@@ -232,42 +246,63 @@ def fetch_order_owner(order_id: str) -> str | None:
     dispatch to decide whether a proposed call is in scope, and a policy layer
     should not be handed data it is only meant to make a decision about.
     """
-    with get_conn().cursor() as cur:
-        cur.execute("SELECT customer_id FROM orders WHERE order_id = %s", (order_id,))
-        row = cur.fetchone()
-        return row["customer_id"] if row else None
+    conn = get_conn()
+    if conn is not None:
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT customer_id FROM orders WHERE order_id = %s", (order_id,))
+                row = cur.fetchone()
+                return row["customer_id"] if row else None
+        except Exception:
+            pass
+    import mock_data
+    return mock_data.ORDER_OWNER.get(order_id)
 
 
 def fetch_account(customer_id: str) -> dict | None:
     """Account standing, plus the customer's order ids, shaped like Assignment
     1's ACCOUNTS records so callers are unchanged."""
-    with get_conn().cursor() as cur:
-        cur.execute("SELECT * FROM accounts WHERE customer_id = %s", (customer_id,))
-        account = cur.fetchone()
-        if account is None:
-            return None
-        cur.execute(
-            "SELECT order_id FROM orders WHERE customer_id = %s ORDER BY order_id",
-            (customer_id,),
-        )
-        account["order_history"] = [r["order_id"] for r in cur.fetchall()]
-        return account
+    conn = get_conn()
+    if conn is not None:
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT * FROM accounts WHERE customer_id = %s", (customer_id,))
+                account = cur.fetchone()
+                if account is not None:
+                    cur.execute(
+                        "SELECT order_id FROM orders WHERE customer_id = %s ORDER BY order_id",
+                        (customer_id,),
+                    )
+                    account["order_history"] = [r["order_id"] for r in cur.fetchall()]
+                    return account
+        except Exception:
+            pass
+    import mock_data
+    acct = mock_data.ACCOUNTS.get(customer_id)
+    return dict(acct) if acct is not None else None
 
 
 def fetch_prior_tickets(customer_id: str) -> list[dict]:
     """This customer's closed tickets, oldest first. [] for a first-time
     customer, which is a normal case and not an error."""
-    with get_conn().cursor() as cur:
-        cur.execute(
-            """
-            SELECT ticket_id, type, summary, resolution
-            FROM prior_tickets
-            WHERE customer_id = %s
-            ORDER BY ticket_id
-            """,
-            (customer_id,),
-        )
-        return cur.fetchall()
+    conn = get_conn()
+    if conn is not None:
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT ticket_id, type, summary, resolution
+                    FROM prior_tickets
+                    WHERE customer_id = %s
+                    ORDER BY ticket_id
+                    """,
+                    (customer_id,),
+                )
+                return cur.fetchall()
+        except Exception:
+            pass
+    import mock_data
+    return list(mock_data.PRIOR_TICKETS.get(customer_id, []))
 
 
 # ------------------------------------------------------------------- seeding
