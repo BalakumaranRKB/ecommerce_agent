@@ -129,6 +129,24 @@ class Trajectory:
 
 _current: ContextVar[Trajectory | None] = ContextVar("current_trajectory", default=None)
 
+# §4.2 trace egress: the trajectory is a log surface, so any FREE-TEXT field
+# recorded onto it must be PII-masked. We mask only these known free-text keys —
+# NOT the structural fields the eval asserts on (doc_ids, similarities, order_id,
+# amount, action, name, reason), so masking can never change a scored value. The
+# `mask` import is lazy (inside the helper) so importing this module never pulls
+# in spaCy, and the eval hot path pays nothing unless a free-text field is present.
+_FREETEXT_KEYS = frozenset({"error", "text", "message", "reasoning", "answer", "content"})
+
+
+def _mask_freetext(d: dict | None) -> dict:
+    """Return a copy of `d` with any free-text value PII-masked. No-op (no spaCy
+    load) when `d` has no free-text keys — the common case."""
+    if not d or not (_FREETEXT_KEYS & d.keys()):
+        return d or {}
+    from pii import mask  # lazy: keeps trajectory import free of spaCy
+    return {k: (mask(v) if k in _FREETEXT_KEYS and isinstance(v, str) else v)
+            for k, v in d.items()}
+
 
 @contextmanager
 def recording() -> Iterator[Trajectory]:
@@ -164,9 +182,9 @@ def record(
         TrajectoryStep(
             kind=kind,
             name=name,
-            args=args or {},
+            args=_mask_freetext(args),
             outcome=outcome,
-            detail=detail or {},
+            detail=_mask_freetext(detail),
         )
     )
 
