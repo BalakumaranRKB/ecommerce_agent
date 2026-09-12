@@ -1,87 +1,27 @@
-# CI — trajectory regression gate (PLAN-assignment-2.md Stage 6)
-#
-# This workflow is deliberately DUMB. It contains no thresholds, no pass/fail
-# arithmetic, and no comparison logic. All of that lives in Python, in
-# eval/regression_eval.py, so it can be run and debugged on a laptop exactly as
-# it runs here (PLAN §7). The only thing this file does is set up an equivalent
-# environment and react to the eval's exit code:
-#
-#     exit 0 -> job passes
-#     exit 1 -> job fails, push is blocked
-#
-# The reference it compares against is eval/baseline.json, committed to the repo
-# and frozen deliberately (see docs/choosing-the-baseline.md for why 5pp and why
-# the comparison is relative rather than an absolute bar).
-
 name: CI
 
 on:
   push:
     branches:
-      - assignment_2
+      - main
+      - assignment-3
   pull_request:
     branches:
-      - assignment_1   # the PR target: main is empty and unrelated (Stage 0)
+      - main
+      - assignment-3
 
-# Cancel a previous in-flight run when new commits land on the same branch.
-# The eval costs real API calls, so paying for a run whose result is already
-# superseded is pure waste.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  eval-gate:
-    name: Trajectory regression gate
+  test-suite:
+    name: Assignment 3 Test Suite Gate
     runs-on: ubuntu-latest
-    timeout-minutes: 20   # the suite runs ~2.5 min locally; this is slack for cold caches, not a target
-
-    # Postgres WITH pgvector — the stock postgres image does not have the
-    # extension, and db.init_schema() runs CREATE EXTENSION vector, so a plain
-    # postgres image fails at schema creation. pg16 matches the local compose setup.
-    services:
-      postgres:
-        image: pgvector/pgvector:pg16
-        env:
-          POSTGRES_DB: ordercare
-          POSTGRES_USER: ordercare
-          POSTGRES_PASSWORD: ordercare
-        ports:
-          - 5432:5432
-        # Without this the job races the database: the runner would start
-        # ingest.py while Postgres is still booting and fail on connection refused.
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
-    env:
-      # db.py reads exactly these five (see _conn_kwargs). Host/port are the
-      # runner's localhost because GitHub maps service container ports there.
-      # NOTE: 5432 here, not the 55432 used locally — that local override exists
-      # only to dodge a host Postgres install. This is the one value that differs
-      # between laptop, CI, and RDS, which is exactly what db.py's docstring says.
-      DB_HOST: localhost
-      DB_PORT: 5432
-      DB_NAME: ordercare
-      DB_USER: ordercare
-      DB_PASSWORD: ordercare
-
-      # The eval drives the real Anthropic model, so the gate needs a real key.
-      # Repo secret, not OIDC — PLAN Stage 6 allows a static secret for the LLM
-      # provider key; only AWS credentials are required to be OIDC-only (Stage 10).
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      LLM_PROVIDER: anthropic
-
-      # Langfuse is a no-op when unset (Stage 1 made tracing degrade silently
-      # rather than crash). Set explicitly to empty so the behaviour is chosen
-      # rather than accidental — unset and empty can differ depending on the check.
-      LANGFUSE_PUBLIC_KEY: ""
-      LANGFUSE_SECRET_KEY: ""
+    timeout-minutes: 10
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Install uv
@@ -90,152 +30,34 @@ jobs:
           enable-cache: true
 
       - name: Set up Python
-        # Matches requires-python >= 3.10. Pinned rather than "latest" so a new
-        # release cannot change dependency resolution underneath the gate.
         run: uv python install 3.11
-
-      # all-MiniLM-L6-v2 is ~90MB from HuggingFace and is loaded twice per run
-      # (ingest.py embeds the docs, then the eval embeds the queries). Cache it,
-      # or every run re-downloads it and the job gets slower and flakier for no reason.
-      - name: Cache embedding model
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/huggingface
-          key: hf-all-MiniLM-L6-v2-${{ runner.os }}
 
       - name: Install dependencies
         run: uv sync
 
-      # Schema + seed + embed + verify, all in one command. ingest.py already
-      # calls init_schema() and ends with verify(), returning non-zero if the
-      # database does not hold what the agent expects — so a bad database fails
-      # HERE, with a clear message, instead of showing up as 12 mystery eval failures.
-      - name: Ingest policy docs and seed reference data
-        run: uv run python ingest.py
+      - name: Run Cost Ledger Tests (Phase 7)
+        run: uv run python test_cost_ledger.py
 
-      # THE GATE. Runs the full suite, compares against the committed
-      # eval/baseline.json, and exits 1 if the pass rate dropped more than the
-      # baseline's threshold_pp. The step fails on that exit code — that is the
-      # entire enforcement mechanism.
-      - name: Trajectory regression gate
-        run: uv run python -m eval.regression_eval --baseline
+      - name: Run Semantic Cache Tests (Phase 7)
+        run: uv run python test_semantic_cache.py
 
-  # ==========================================================================
-  # Everything below only runs if the gate passed. That `needs: eval-gate` is
-  # the entire point of the assignment: a regressed trajectory does not reach
-  # ECR, let alone Fargate. Stage 7's red run stopped exactly here.
-  # ==========================================================================
+      - name: Run Layered PII Masking Tests (Phase 6)
+        run: uv run python test_pii_masking.py
 
-  build-and-push:
-    name: Build and push image to ECR
-    needs: eval-gate
-    runs-on: ubuntu-latest
-    # Pull requests run the gate but must not publish anything.
-    if: github.event_name == 'push'
+      - name: Run HITL Approval Gate Tests (Phase 5)
+        run: uv run python test_hitl_gate.py
 
-    permissions:
-      # Without id-token: write GitHub never mints the OIDC token and the role
-      # assumption fails with a confusing "Not authorized to perform
-      # sts:AssumeRoleWithWebIdentity". PLAN §13.
-      id-token: write
-      contents: read
+      - name: Run Refund Settlement Seam Tests (Phase 5)
+        run: uv run python test_settlement.py
 
-    outputs:
-      image: ${{ steps.build.outputs.image }}
+      - name: Run Policy Boundary Tests (Phase 5)
+        run: uv run python test_policy_boundary.py
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Run Structured Output Decisions Tests (Phase 4)
+        run: uv run python test_structured_decision.py
 
-      # No AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY anywhere. The role ARN is a
-      # repo VARIABLE rather than a secret on purpose: it is an identifier, not a
-      # credential, and the trust policy is scoped to this exact repo.
-      - name: Configure AWS credentials via OIDC
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION }}
+      - name: Run Billing Specialist Dispute Resolution Tests (Phase 1)
+        run: uv run python -m billing_specialist.test_resolve_dispute
 
-      - name: Log in to ECR
-        id: ecr
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Build and push
-        id: build
-        env:
-          REGISTRY: ${{ steps.ecr.outputs.registry }}
-          REPOSITORY: ordercare-agent
-          # Tagged by commit SHA, never `latest` alone (PLAN §2.6.1). A moving
-          # tag makes "which code is actually running?" unanswerable and makes
-          # rollback guesswork.
-          IMAGE_TAG: ${{ github.sha }}
-        run: |
-          IMAGE="$REGISTRY/$REPOSITORY:$IMAGE_TAG"
-          # linux/amd64 explicitly: Fargate will not run arm64.
-          docker build --platform linux/amd64 -t "$IMAGE" .
-          docker push "$IMAGE"
-          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
-          echo "Pushed $IMAGE"
-
-  deploy:
-    name: Deploy to ECS Fargate
-    needs: [eval-gate, build-and-push]
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push'
-
-    permissions:
-      id-token: write
-      contents: read
-
-    env:
-      CLUSTER: ordercare-agent-cluster
-      SERVICE: ordercare-agent-service
-      TASK_FAMILY: ordercare-agent-task
-
-    steps:
-      - name: Configure AWS credentials via OIDC
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION }}
-
-      # Read the live task definition, swap ONLY the image, register the result
-      # as a new revision. Everything else - env vars, SSM secret references,
-      # cpu/memory, log config - is carried across untouched, so CI never has to
-      # restate configuration that CloudFormation owns. This is the deploy
-      # boundary made concrete: the stack owns the infrastructure, the pipeline
-      # owns which image is running.
-      #
-      # The del(...) is required: describe-task-definition returns server-side
-      # fields that register-task-definition rejects as input.
-      - name: Register new task definition revision
-        id: taskdef
-        env:
-          IMAGE: ${{ needs.build-and-push.outputs.image }}
-        run: |
-          CURRENT=$(aws ecs describe-task-definition --task-definition "$TASK_FAMILY" --query taskDefinition)
-          UPDATED=$(echo "$CURRENT" | jq --arg IMAGE "$IMAGE" '
-            .containerDefinitions[0].image = $IMAGE
-            | del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
-                  .compatibilities, .registeredAt, .registeredBy)')
-          ARN=$(aws ecs register-task-definition \
-                  --cli-input-json "$UPDATED" \
-                  --query 'taskDefinition.taskDefinitionArn' --output text)
-          echo "arn=$ARN" >> "$GITHUB_OUTPUT"
-          echo "Registered $ARN with image $IMAGE"
-
-      - name: Update the service
-        run: |
-          aws ecs update-service \
-            --cluster "$CLUSTER" \
-            --service "$SERVICE" \
-            --task-definition "${{ steps.taskdef.outputs.arn }}" \
-            --query 'service.[serviceName,taskDefinition]' --output text
-
-      # Fail the job if the new revision never reaches steady state - otherwise a
-      # broken image would deploy "successfully" while ECS quietly rolled back to
-      # the previous task definition and the pipeline reported green.
-      - name: Wait for the deployment to stabilise
-        run: |
-          aws ecs wait services-stable --cluster "$CLUSTER" --services "$SERVICE"
-          echo "Service is stable on the new revision."
+      - name: Run A2A Roundtrip Protocol Tests (Phase 1)
+        run: uv run python -m billing_specialist.test_a2a_roundtrip

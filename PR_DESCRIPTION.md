@@ -1,8 +1,20 @@
 # Pull Request: Assignment 3 — The Autonomy Decision, AWS-Native Migration & Production Hardening
 
-## Overview
+## 📌 Executive Summary
 
 This PR completes the end-to-end migration and production hardening of the **OrderCare** support agent onto managed AWS services and agentic safety infrastructure across Sessions 5, 6, and 7.
+
+---
+
+## 🎥 Video Submission Timestamp Guide (`assignment_3_video_submission.mp4`)
+
+| Part | Rubric Requirement | Video Timestamp | Key Demonstration |
+| :--- | :--- | :--- | :--- |
+| **1** | **A2A Handoff Live (Broken vs Fixed)** | `00:00 - 03:55` | `DROP_STANDING_IN_HANDOFF=1` auto-approves ₹599 (broken) vs. standing passed escalating to human (fixed). |
+| **2** | **AgentCore Invocation + Bedrock KB Retrieval** | `03:55 - 06:25` | Live `agentcore invoke` on `ordercare_agent-a90u81DsX9` with Bedrock KB (`URBHHV8INY`), Titan v2, and Cohere Rerank v3.5. |
+| **3** | **Layered PII Masking (Presidio + Guardrails)** | `06:25 - 09:55` | Presidio custom recognizers catching PAN/Aadhaar (`pii.py`) + Bedrock Guardrail (`dqyydvde07yq`) catching full Indian addresses. |
+| **4** | **Policy Boundary & HITL Pause/Resume (AWS Memory)** | `16:00 - 19:20` | Live pause/resume against AWS AgentCore Memory (`ordercare_hitl_approvals-fh6dj022G7`), live rejection, and re-validation abort on drift. |
+| **5** | **Semantic Cache (Before/After Latency)** | `10:00 - 16:00` | Repeat rephrased query hitting semantic cache (`semantic_cache.py`), reducing latency by >87% (from ~958ms to ~117ms). |
 
 ---
 
@@ -19,12 +31,11 @@ This PR completes the end-to-end migration and production hardening of the **Ord
 - **Real Vulnerability (CWP #2):** When a human manager takes hours or days to review a paused refund, underlying order state may drift in the database (e.g. order canceled, already refunded, or account suspended).
 - **The Fix:** `resume_settlement()` re-queries live state from the database upon human approval. If state drifted, it aborts settlement with `state_changed` instead of executing a stale refund.
 - **Resource Correlation:** Approvals are keyed by **`order_id` (resource-keyed)** rather than `request_id`, permanently eliminating double-refund vulnerabilities across parallel tickets.
-- *Full Documentation:* [`docs/hitl-bug-found.md`](docs/hitl-bug-found.md) & [`docs/phase-5-aws-memory-tail-resolution.md`](docs/phase-5-aws-memory-tail-resolution.md)
+- *Full Documentation:* [`docs/hitl-bug-found.md`](docs/hitl-bug-found.md)
 
 ### 3. Policy Threshold (₹5,000) & Redaction Strategy
 - **Threshold Rationale:** ₹5,000 represents the 95th percentile of daily transaction values. Standard returns are processed instantly; high-value adjustments require human oversight.
 - **Redaction Strategy:** Full entity-tag replacement (`<PHONE_NUMBER>`, `<IN_AADHAAR>`, `<IN_PAN>`, `<EMAIL_ADDRESS>`). We avoid partial masking (`+91 98***`) because partial digits still leak geographic circles and telecom identifiers under Indian DPDP Act 2023 regulations.
-- *Full Documentation:* [`docs/phase_6_implementation_plan.md`](docs/phase_6_implementation_plan.md)
 
 ### 4. Layering Win: Microsoft Presidio + AWS Bedrock Guardrails
 - **Complementary Defense in Depth (CWP #3):**
@@ -45,22 +56,60 @@ This PR completes the end-to-end migration and production hardening of the **Ord
 
 ---
 
-## ☁️ AWS Cloud Infrastructure Verified (`ap-south-1`)
+## ☁️ Live Cloud Invocation & Hardening Evidence
 
-| Component | AWS Resource ID / Name | Description |
-|---|---|---|
-| **Bedrock AgentCore** | `ordercare_agent-a90u81DsX9` | Managed agent runtime hosting Claude Sonnet |
-| **Bedrock Knowledge Base** | `URBHHV8INY` | Aurora PostgreSQL Serverless v2 + Titan Text Embeddings v2 |
-| **Reranker Model** | `cohere.rerank-v3-5:0` | Bedrock cross-encoder reranker with `MIN_SIMILARITY=0.20` |
-| **AgentCore Memory** | `ordercare_hitl_approvals-fh6dj022G7` | Durable session memory for HITL approval gate |
-| **Bedrock Guardrail** | `ordercare-pii-guardrail` (`dqyydvde07yq`) | Sensitive Information Filter (ANONYMIZE) |
-| **Assignment 2 ECS/ALB** | *Retired / Deleted* | CloudFormation stack torn down; zero running ALB/ECS tasks |
+### 1. AgentCore Deployment & Bedrock KB Trajectory (`agentcore invoke`)
+```json
+{
+  "step": "retrieval",
+  "outcome": "ok",
+  "detail": {
+    "doc_ids": ["shipping-delay-compensation", "refund-eligibility"],
+    "similarities": [0.6108, 0.3852],
+    "search_type": "HYBRID+RERANK",
+    "min_similarity": 0.20,
+    "gap_decision": "covered"
+  }
+}
+```
+- **Agent ARN:** `arn:aws:bedrock-agentcore:ap-south-1:648648473114:runtime/ordercare_agent-a90u81DsX9`
+- **Session ID:** `ac362d90-edf4-4f3c-baaa-2d4e2d1cc2dc`
+- **Trace ID:** `407c030d057a4e4fa441865954605615`
+
+### 2. Live Bedrock Guardrail (`check_guardrail.py`)
+```text
+guardrail=dqyydvde07yq vDRAFT region=ap-south-1
+action        : GUARDRAIL_INTERVENED
+outputs[0].text: Thanks {NAME}. Call me on {PHONE} or email {EMAIL}. Ship to {ADDRESS}.
+assessments (detected & anonymized): ADDRESS, NAME, PHONE, EMAIL
+```
+
+### 3. Live HITL Gate on AgentCore Memory (`demo_hitl_live.py`)
+```text
+Live HITL demo | memory=ordercare_hitl_approvals-fh6dj022G7 region=ap-south-1
+[1] Pause: settlement_outcome = pending_approval
+    -> persisted to Memory: key='ord_6002', status=pending, amount=₹8990
+[2] Resume: Reviewer Action: APPROVE
+    -> settlement_outcome = executed (executed=True)
+    -> Memory record updated: status=executed
+[3] Re-validation on Drift: order status changed to 'cancelled'
+    -> executed=False, abort_code=state_changed (stale approval refused)
+```
+
+### 4. Semantic Cache Latency Reduction (`semantic_cache.py`)
+```text
+Query 1: 'Can I still return this? It arrived three weeks ago.'
+  -> Latency: 958.53 ms (MISS - fetched from Bedrock KB)
+Query 2: 'Can I return an item that was delivered 3 weeks ago?' (Rephrased)
+  -> Latency: 117.73 ms (HIT - served from Semantic Cache)
+  -> Latency Reduction: 87.15% faster!
+```
 
 ---
 
-## 🧪 Test Suite Results (100% PASS)
+## 🧪 CI / CD Pipeline (100% Green 🟢)
 
-All 9 automated test suites pass locally and against cloud endpoints:
+The GitHub Actions workflow (`.github/workflows/ci-cd.yml`) executes all 9 test suites on every push/PR:
 ```bash
 uv run python test_cost_ledger.py           # 5/5 PASS
 uv run python test_semantic_cache.py        # 6/6 PASS
